@@ -5,6 +5,7 @@
 #include "theme.h"
 #include "gfx_draw.h"
 #include "hud.h"
+#include "weather.h"
 #include <Arduino.h>
 #include <WiFi.h>
 #include <esp_heap_caps.h>
@@ -25,7 +26,9 @@ float radius_km = RADIUS_KM;
 // ---------------------------------------------------------------------------
 static lv_obj_t *canvas   = NULL;
 static uint16_t *canvas_buf = NULL;
-static uint16_t *bg_buf     = NULL;
+static uint16_t *bg_buf     = NULL;   // gradient + map, built once at boot
+static uint16_t *scene_buf  = NULL;   // bg_buf + precipitation, per radar frame
+static size_t    buf_bytes  = 0;
 
 static float pixels_per_km;
 static float lon_scale;
@@ -188,6 +191,92 @@ static void draw_scope_furniture() {
 }
 
 // ---------------------------------------------------------------------------
+// Precipitation compositing
+//
+// Radar refreshes every 6 minutes, so this runs on that cadence (and per step
+// during a replay) rather than per display frame. The per-frame cost stays a
+// single memcpy no matter what the weather is doing.
+// ---------------------------------------------------------------------------
+#define WX_LUT_N 128
+static uint8_t wx_lut[WX_LUT_N][4];   // r,g,b,a
+
+static void build_wx_lut() {
+    for (int i = 0; i < WX_LUT_N; i++) {
+        float t = (float)i / (float)(WX_LUT_N - 1);
+        int k = 0;
+        while (k < C_WX_STOP_COUNT - 2 && C_WX_STOPS[k + 1].t < t) k++;
+        const WxStop &a = C_WX_STOPS[k];
+        const WxStop &b = C_WX_STOPS[k + 1];
+        float span = b.t - a.t;
+        float f = (span > 0.0001f) ? (t - a.t) / span : 0.0f;
+        if (f < 0.0f) f = 0.0f;
+        if (f > 1.0f) f = 1.0f;
+        wx_lut[i][0] = (uint8_t)(a.r + (b.r - a.r) * f);
+        wx_lut[i][1] = (uint8_t)(a.g + (b.g - a.g) * f);
+        wx_lut[i][2] = (uint8_t)(a.b + (b.b - a.b) * f);
+        wx_lut[i][3] = (uint8_t)(a.a + (b.a - a.a) * f);
+    }
+}
+
+static void compose_scene() {
+    if (!scene_buf || !bg_buf) return;
+    memcpy(scene_buf, bg_buf, buf_bytes);
+    if (!weather_valid || !weather_grid) return;
+
+    const float cell_px = (WX_BOX_KM * 2.0f * pixels_per_km) / (float)WX_N;
+    const float half = (float)WX_N * 0.5f;
+
+    for (int y = 0; y < SCREEN_H; y++) {
+        int x0, x1;
+        if (!gfx_span(y, x0, x1)) continue;
+
+        float gy = ((float)y + 0.5f - (float)SCOPE_CY) / cell_px + half;
+        int jy = (int)floorf(gy);
+        if (jy < 0 || jy >= WX_N - 1) continue;
+        float fy = gy - (float)jy;
+
+        const uint8_t *row0 = &weather_grid[jy * WX_N];
+        const uint8_t *row1 = row0 + WX_N;
+        uint16_t *dst = &scene_buf[y * SCREEN_W];
+
+        // Step gx by a constant rather than dividing per pixel — the divide was
+        // most of the compositing cost, and this runs on every replay frame.
+        const float inv_cell = 1.0f / cell_px;
+        const float wy1 = fy, wy0 = 1.0f - fy;
+        float gx = ((float)x0 + 0.5f - (float)SCOPE_CX) * inv_cell + half;
+
+        for (int x = x0; x <= x1; x++, gx += inv_cell) {
+            int ix = (int)gx;
+            if (ix < 0 || ix >= WX_N - 1) continue;
+            float fx = gx - (float)ix;
+            float wx0 = 1.0f - fx;
+
+            float v = (row0[ix] * wx0 + row0[ix + 1] * fx) * wy0
+                    + (row1[ix] * wx0 + row1[ix + 1] * fx) * wy1;
+            if (v <= 5.0f) continue;
+
+            int li = (int)(v * (float)(WX_LUT_N - 1) / 255.0f);
+            if (li > WX_LUT_N - 1) li = WX_LUT_N - 1;
+            uint8_t a = wx_lut[li][3];
+            if (!a) continue;
+
+            uint16_t d = dst[x];
+            int dr = (d >> 11) & 0x1F, dg = (d >> 5) & 0x3F, db = d & 0x1F;
+            dr += (((wx_lut[li][0] >> 3) - dr) * a) >> 8;
+            dg += (((wx_lut[li][1] >> 2) - dg) * a) >> 8;
+            db += (((wx_lut[li][2] >> 3) - db) * a) >> 8;
+            dst[x] = (uint16_t)((dr << 11) | (dg << 5) | db);
+        }
+    }
+}
+
+void ambient_scene_dirty() {
+    uint32_t t0 = millis();
+    compose_scene();
+    Serial.printf("Scene recomposited in %lu ms\r\n", (unsigned long)(millis() - t0));
+}
+
+// ---------------------------------------------------------------------------
 // Sonar pulses — two expanding rings, phase offset. This replaces the old
 // rotating-sweep idea deliberately: a pulse radiating from home is calmer,
 // reads correctly as "range", and costs one ring per frame instead of a
@@ -321,6 +410,9 @@ static void draw_contacts(TrackedVehicle *list, int count, bool is_air,
             if (v.flash < 0.0f) v.flash = 0.0f;
         }
 
+        // Over precipitation the additive glow saturates toward white and the
+        // contact vanishes into the field, so sink some shade under it first.
+        if (weather_valid) gfx_casing(canvas_buf, x, y, 15, 165);
         gfx_glow(canvas_buf, x, y, 14, glow, (uint8_t)(bright * 150.0f));
         gfx_glow(canvas_buf, x, y, 6,  core, (uint8_t)(bright * 110.0f));
 
@@ -360,6 +452,39 @@ static void draw_home(uint32_t now, bool wifi_ok) {
 }
 
 // ---------------------------------------------------------------------------
+// Inbound cue
+//
+// The scope only reaches 15 km, which at Alberta system speeds is about half an
+// hour of warning — by then you can see it out the window. The wide sweep
+// answers the more useful question, and it costs one arc on the rim.
+// ---------------------------------------------------------------------------
+static void draw_inbound(uint32_t now) {
+    if (!weather_inbound) return;
+
+    const float cx = (float)SCOPE_CX, cy = (float)SCOPE_CY;
+    float a0 = (weather_inbound_bearing - 13.0f) * DEG2RAD;
+    float a1 = (weather_inbound_bearing + 13.0f) * DEG2RAD;
+
+    // Nearer weather breathes faster; 40 km is a slow pulse, 20 km an urgent one.
+    float t = (weather_inbound_km - WX_WIDE_MIN_KM) / 60.0f;
+    if (t < 0.0f) t = 0.0f;
+    if (t > 1.0f) t = 1.0f;
+    float period = 2200.0f + t * 3200.0f;
+    float br = (sinf((float)(now - boot_ms) * 2.0f * (float)M_PI / period) + 1.0f) * 0.5f;
+    uint8_t alpha = (uint8_t)(60.0f + br * 110.0f);
+
+    const int segs = 14;
+    float r = (float)SCOPE_R - 7.0f;
+    float px = cx + sinf(a0) * r, py = cy - cosf(a0) * r;
+    for (int i = 1; i <= segs; i++) {
+        float a = a0 + (a1 - a0) * (float)i / (float)segs;
+        float nx = cx + sinf(a) * r, ny = cy - cosf(a) * r;
+        gfx_stroke(canvas_buf, px, py, nx, ny, C_INBOUND, alpha, 2.6f);
+        px = nx; py = ny;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Frame
 // ---------------------------------------------------------------------------
 static uint32_t last_frame_ms = 0;
@@ -372,7 +497,7 @@ static void render_frame() {
     if (dt_s > 0.5f) dt_s = 0.5f;
     last_frame_ms = now;
 
-    memcpy(canvas_buf, bg_buf, (size_t)SCREEN_W * SCREEN_H * sizeof(uint16_t));
+    memcpy(canvas_buf, scene_buf, buf_bytes);
 
     float pulse_r[PULSE_COUNT];
     draw_pulses(now, pulse_r);
@@ -381,6 +506,7 @@ static void render_frame() {
     draw_contacts(proximity.aircraft, proximity.aircraft_count, true,  now, pulse_r, dt_s);
 
     draw_home(now, WiFi.status() == WL_CONNECTED);
+    draw_inbound(now);
 
     for (int p = 0; p < PULSE_COUNT; p++) pulse_prev_r[p] = pulse_r[p];
 
@@ -403,18 +529,21 @@ void ambient_init() {
 
     gfx_init();
 
-    size_t buf_bytes = (size_t)SCREEN_W * SCREEN_H * sizeof(uint16_t);
+    buf_bytes = (size_t)SCREEN_W * SCREEN_H * sizeof(uint16_t);
     canvas_buf = (uint16_t *)heap_caps_malloc(buf_bytes, MALLOC_CAP_SPIRAM);
     bg_buf     = (uint16_t *)heap_caps_malloc(buf_bytes, MALLOC_CAP_SPIRAM);
-    if (!canvas_buf || !bg_buf) {
+    scene_buf  = (uint16_t *)heap_caps_malloc(buf_bytes, MALLOC_CAP_SPIRAM);
+    if (!canvas_buf || !bg_buf || !scene_buf) {
         Serial.println("FATAL: canvas PSRAM alloc failed!");
         return;
     }
+    build_wx_lut();
 
     uint32_t t0 = millis();
     draw_background_gradient();
     draw_map();
     draw_scope_furniture();
+    memcpy(scene_buf, bg_buf, buf_bytes);
     memcpy(canvas_buf, bg_buf, buf_bytes);
     Serial.printf("Background composited in %lu ms\r\n", (unsigned long)(millis() - t0));
 
@@ -427,6 +556,7 @@ void ambient_init() {
     lv_obj_set_size(canvas, SCREEN_W, SCREEN_H);
 
     hud_init();
+    weather_init();
 
     lv_timer_create(frame_tick_cb, FRAME_MS, NULL);
 

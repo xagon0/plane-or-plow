@@ -11,3 +11,16 @@ must match `HOME_LAT` / `HOME_LON` in `src/config.h`. Simplification tolerance i
 18-30 m by class against a scope that draws ~69 m per pixel, so it is sub-pixel.
 
 Map data (c) OpenStreetMap contributors, ODbL.
+
+
+# Weather radar palette
+
+`src/wx_ramp.h` is generated too:
+
+    python3 tools/wx_ramp.py
+
+It samples Environment Canada's GeoMet legend for RADAR_1KM_RSNO. Rerun it only
+if EC changes the palette; the firmware uses it to map tile pixels back to an
+intensity.
+
+Radar data (c) Environment and Climate Change Canada, GeoMet open data.

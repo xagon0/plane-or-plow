@@ -48,6 +48,32 @@ static const RGB C_PLOW_CORE   = {255, 214, 158 };
 static const RGB C_PLOW_GLOW   = {228, 138,  28 };
 static const RGB C_PLOW_TRAIL  = {214, 128,  34 };
 
+// Precipitation. Cool for ordinary snow; only the top third heats, through a
+// near-white pivot into amber, red and pink. Blue straight to orange would pass
+// through brown, which reads as a rendering fault rather than as weather, and
+// routing through white makes the warm end mean "heavier" rather than "other".
+struct WxStop { float t; uint8_t r, g, b, a; };
+
+static const WxStop C_WX_STOPS[] = {
+    { 0.00f,  40,  56, 104,   0 },
+    { 0.10f,  56,  74, 132,  22 },
+    { 0.28f,  78, 112, 186,  44 },
+    { 0.45f, 130, 168, 224,  65 },
+    { 0.58f, 196, 214, 242,  82 },
+    { 0.68f, 245, 236, 214,  96 },   // pivot
+    { 0.78f, 250, 190, 110, 126 },
+    { 0.88f, 240, 120,  80, 140 },
+    { 0.95f, 232,  74,  96, 150 },
+    { 1.00f, 236,  96, 168, 158 },
+};
+static const int C_WX_STOP_COUNT = sizeof(C_WX_STOPS) / sizeof(WxStop);
+
+// Shade sunk under a contact so it survives a bright precipitation field.
+static const RGB C_CASING      = {  5,   9,  14 };
+
+// Inbound cue drawn on the rim
+static const RGB C_INBOUND     = {150, 190, 240 };
+
 // Type
 static const RGB C_TEXT        = {154, 192, 216 };
 static const RGB C_TEXT_DIM    = { 68,  94, 114 };

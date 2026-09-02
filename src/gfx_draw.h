@@ -38,4 +38,12 @@ void gfx_poly(uint16_t *buf, const float *xs, const float *ys, int n,
 // Additive gaussian glow, radius in pixels.
 void gfx_glow(uint16_t *buf, float x, float y, int radius, RGB c, uint8_t a);
 
+// Same falloff as gfx_glow but alpha-blended toward a dark colour: sinks a
+// pocket of shade under a symbol so it keeps contrast over a bright layer.
+void gfx_casing(uint16_t *buf, float x, float y, int radius, uint8_t a);
+
+// Inclusive x span of the scope circle on row y. Returns false for rows that
+// fall outside it entirely.
+bool gfx_span(int y, int &x0, int &x1);
+
 #endif // GFX_DRAW_H

@@ -2,6 +2,7 @@
 #include "ambient.h"
 #include "config.h"
 #include "network.h"
+#include "weather.h"
 #include <Arduino.h>
 #include <lvgl.h>
 #include <time.h>
@@ -106,6 +107,10 @@ void backlight_init() {
 
 void backlight_on_tap() {
     if (is_daytime()) {
+        // Replay the last hour of radar, and pull fresh contacts while we are
+        // at it. The loop is the one thing a still radar frame cannot tell you:
+        // whether the weather is arriving or leaving.
+        weather_replay();
         network_boost_polling();
         return;
     }
@@ -117,6 +122,7 @@ void backlight_on_tap() {
         target_duty = BL_PEEK_DUTY;
         peek_active = true;
         peek_deadline = millis() + NIGHT_PEEK_MS;
+        weather_replay();
         network_boost_polling();
     }
 }

@@ -57,4 +57,8 @@ void trail_push(TrackedVehicle &v, float lat, float lon);
 
 void ambient_init();
 
+// Recomposite the static scene (map + precipitation). Called when a new radar
+// frame lands or a replay steps; never per display frame.
+void ambient_scene_dirty();
+
 #endif // AMBIENT_H

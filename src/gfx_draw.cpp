@@ -41,6 +41,13 @@ void gfx_init() {
 
 void gfx_mask_enable(bool on) { mask_on = on; }
 
+bool gfx_span(int y, int &x0, int &x1) {
+    if (y < 0 || y >= SCREEN_H) return false;
+    x0 = span_x0[y];
+    x1 = span_x1[y];
+    return x0 <= x1;
+}
+
 // ---------------------------------------------------------------------------
 // Pixel ops
 // ---------------------------------------------------------------------------
@@ -234,6 +241,34 @@ void gfx_glow(uint16_t *buf, float x, float y, int radius, RGB c, uint8_t a) {
             if (idx > GLOW_LUT_N - 1) idx = GLOW_LUT_N - 1;
             uint8_t g = (uint8_t)((glow_lut[idx] * a) >> 8);
             gfx_add(buf, px, py, c, g);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Dark casing. Contact glows are additive, so over bright precipitation they
+// saturate toward white and the symbol dissolves into the field. Sinking shade
+// underneath first is the trick a paper chart uses to case a symbol over busy
+// ground, and it works for the same reason.
+// ---------------------------------------------------------------------------
+void gfx_casing(uint16_t *buf, float x, float y, int radius, uint8_t a) {
+    if (radius < 1 || a == 0) return;
+    int cxi = (int)floorf(x + 0.5f);
+    int cyi = (int)floorf(y + 0.5f);
+    float inv_r2 = 1.0f / (float)(radius * radius);
+
+    for (int py = cyi - radius; py <= cyi + radius; py++) {
+        if (py < 0 || py >= SCREEN_H) continue;
+        float dy = (float)py - y;
+        float dy2 = dy * dy;
+        for (int px = cxi - radius; px <= cxi + radius; px++) {
+            float dx = (float)px - x;
+            float d2 = dx * dx + dy2;
+            if (d2 >= (float)(radius * radius)) continue;
+            int idx = (int)(d2 * inv_r2 * (float)(GLOW_LUT_N - 1));
+            if (idx < 0) idx = 0;
+            if (idx > GLOW_LUT_N - 1) idx = GLOW_LUT_N - 1;
+            gfx_blend(buf, px, py, C_CASING, (uint8_t)((glow_lut[idx] * a) >> 8));
         }
     }
 }
