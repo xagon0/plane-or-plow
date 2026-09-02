@@ -121,16 +121,27 @@ static void draw_background_gradient() {
     gfx_mask_enable(true);
 }
 
-static void draw_roads() {
-    for (int r = 0; r < ROAD_COUNT; r++) {
-        const RoadPt *pts = roads[r].points;
-        int count = roads[r].count;
-        RGB col = roads[r].major ? C_ROAD_MAJOR : C_ROAD;
-        for (int i = 0; i < count - 1; i++) {
-            float x0, y0, x1, y1;
-            latlon_to_screen(pts[i].lat,     pts[i].lon,     x0, y0);
-            latlon_to_screen(pts[i + 1].lat, pts[i + 1].lon, x1, y1);
-            gfx_stroke(bg_buf, x0, y0, x1, y1, col, 255, 1.6f);
+static void draw_map() {
+    // Indexed by MAP_WATER / MAP_MINOR / MAP_ROAD / MAP_MAJOR. Ways are stored
+    // in that order, so this also fixes the painter's order: water underneath,
+    // highways on top.
+    const RGB   cls_col[4] = { C_MAP_WATER, C_MAP_MINOR, C_MAP_ROAD, C_MAP_MAJOR };
+    const float cls_w[4]   = { 1.7f,        1.0f,        1.4f,       1.9f        };
+
+    for (int w = 0; w < MAP_WAY_COUNT; w++) {
+        const MapWay &way = map_ways[w];
+        if (way.cls > 3) continue;
+        const MapPt *pts = &map_pts[way.start];
+        const RGB col = cls_col[way.cls];
+        const float wid = cls_w[way.cls];
+
+        float x0, y0;
+        latlon_to_screen(pts[0].lat, pts[0].lon, x0, y0);
+        for (int i = 1; i < (int)way.count; i++) {
+            float x1, y1;
+            latlon_to_screen(pts[i].lat, pts[i].lon, x1, y1);
+            gfx_stroke(bg_buf, x0, y0, x1, y1, col, 255, wid);
+            x0 = x1; y0 = y1;
         }
     }
 }
@@ -139,8 +150,8 @@ static void draw_scope_furniture() {
     const float cx = (float)SCOPE_CX, cy = (float)SCOPE_CY;
 
     // Range rings at 1/3 and 2/3 of the scope.
-    gfx_ring(bg_buf, cx, cy, SCOPE_R * 0.3333f, C_RING, 165, 1.0f);
-    gfx_ring(bg_buf, cx, cy, SCOPE_R * 0.6667f, C_RING, 150, 1.0f);
+    gfx_ring(bg_buf, cx, cy, SCOPE_R * 0.3333f, C_RING, 195, 1.0f);
+    gfx_ring(bg_buf, cx, cy, SCOPE_R * 0.6667f, C_RING, 180, 1.0f);
 
     // Minor bearing ticks every 15 degrees, just inside the rim.
     for (int i = 0; i < 24; i++) {
@@ -396,7 +407,7 @@ void ambient_init() {
 
     uint32_t t0 = millis();
     draw_background_gradient();
-    draw_roads();
+    draw_map();
     draw_scope_furniture();
     memcpy(canvas_buf, bg_buf, buf_bytes);
     Serial.printf("Background composited in %lu ms\r\n", (unsigned long)(millis() - t0));

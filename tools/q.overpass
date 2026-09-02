@@ -1,0 +1,8 @@
+[out:json][timeout:180];
+(
+  way(around:17000,51.0447,-114.0719)[highway~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential)$"];
+  way(around:17000,51.0447,-114.0719)[waterway~"^(river|stream)$"];
+  way(around:17000,51.0447,-114.0719)[natural=water];
+  way(around:17000,51.0447,-114.0719)[aeroway=runway];
+);
+out geom;

@@ -18,10 +18,14 @@ static const RGB C_BG_CENTER   = { 11,  22,  31 };   // beneath the scope
 static const RGB C_BG_EDGE     = {  3,   6,  10 };   // scope rim
 static const RGB C_BG_CORNER   = {  2,   3,   5 };   // outside the scope
 
+// Map geometry, dimmest to brightest. Indexed by MAP_* class in roads_data.h.
+static const RGB C_MAP_WATER   = { 16,  60,  92 };   // Bow River, creeks, lakes
+static const RGB C_MAP_MINOR   = { 17,  27,  35 };   // residential, range roads
+static const RGB C_MAP_ROAD    = { 28,  45,  58 };   // secondary, tertiary
+static const RGB C_MAP_MAJOR   = { 44,  70,  88 };   // highways, runways
+
 // Scope furniture
-static const RGB C_ROAD        = { 20,  33,  43 };
-static const RGB C_ROAD_MAJOR  = { 28,  46,  60 };
-static const RGB C_RING        = { 30,  54,  70 };
+static const RGB C_RING        = { 38,  66,  86 };
 static const RGB C_RING_OUTER  = { 52,  92, 116 };
 static const RGB C_TICK        = { 62, 104, 130 };
 static const RGB C_TICK_NORTH  = {120, 180, 215 };

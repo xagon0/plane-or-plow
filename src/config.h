@@ -5,7 +5,7 @@
 #define WIFI_SSID "your-network"
 #define WIFI_PASS "your-password"
 
-// --- Home location (NW Calgary) ---
+// --- Home location (configure with tools/configure.py) ---
 #define HOME_LAT 51.0447
 #define HOME_LON -114.0719
 #define RADIUS_KM 15.0
