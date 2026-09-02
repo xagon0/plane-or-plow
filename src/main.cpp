@@ -123,22 +123,34 @@ void setup() {
     indev_drv.read_cb = lvgl_touchpad_read;
     lv_indev_drv_register(&indev_drv);
 
-    // Apply dark theme
+    // Dark theme — the scope draws its own colours, this just keeps LVGL's
+    // defaults from putting light chrome behind them.
     lv_theme_t *th = lv_theme_default_init(
         lv_disp_get_default(),
-        lv_palette_main(LV_PALETTE_BLUE),
-        lv_palette_main(LV_PALETTE_RED),
+        lv_color_hex(0x2E88E0),
+        lv_color_hex(0xE48A1C),
         true,
         LV_FONT_DEFAULT
     );
     lv_disp_set_theme(lv_disp_get_default(), th);
+    lv_obj_set_style_bg_color(lv_scr_act(), lv_color_hex(0x000000), 0);
 
-    // --- Initialize networking, ambient display, then backlight ---
-    network_init();
+    // --- Scope first, then the radio ---
+    // ambient_init() composites the static background, so painting it before
+    // network_init() (which blocks for up to 15s on the WiFi handshake) means
+    // the scope is already on screen and fading up while we connect.
     ambient_init();
     backlight_init();
 
-    Serial.println("Airplane or Snowplow — ambient display ready");
+    for (int i = 0; i < 140; i++) {   // ~700ms: first flush + backlight fade-in
+        lv_timer_handler();
+        backlight_update();
+        delay(5);
+    }
+
+    network_init();
+
+    Serial.println("Airplane or Snowplow — scope ready");
 }
 
 void loop() {

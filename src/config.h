@@ -15,8 +15,11 @@
 #define PLOW_API_URL     "https://511.alberta.ca/map/mapIcons/ServiceVehicles"
 
 // --- Timing ---
-#define API_POLL_MS       45000   // Poll one source every 45s (each source every 90s)
-#define BOOST_POLL_MS     15000   // 15s per tick during boost (each source every 30s)
+// Aircraft take 3 of every 4 ticks, plows the 4th: aircraft refresh ~27s,
+// plows ~80s. Shorter aircraft gaps mean the renderer extrapolates less
+// between fixes, which is what keeps their motion smooth.
+#define API_POLL_MS       20000   // one source per tick
+#define BOOST_POLL_MS     8000    // faster ticks after a tap
 #define BOOST_DURATION_MS 180000  // 3 min of fast polling after interaction
 #define FRAME_MS          33      // ~30 FPS
 
@@ -35,6 +38,14 @@
 #define BL_PWM_CHANNEL   7
 #define BL_PWM_FREQ      300
 #define BL_PWM_RESOLUTION 8
+
+// Brightness is fully automatic now — no on-screen control. Transitions ease
+// between these levels rather than stepping, so the schedule change reads as
+// the room dimming rather than a switch being thrown.
+#define BL_DAY_DUTY      255
+#define BL_NIGHT_DUTY    0
+#define BL_PEEK_DUTY     26      // ~10%, enough to read in a dark room
+#define BL_FADE_MS       1600    // full-range fade time
 
 // --- Night peek ---
 #define NIGHT_PEEK_MS    15000

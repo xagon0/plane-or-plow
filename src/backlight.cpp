@@ -7,157 +7,138 @@
 #include <time.h>
 
 // ---------------------------------------------------------------------------
-// Brightness table — full range at 150 Hz (community-tested for this board)
+// Brightness is scheduled, not controlled. v1 cycled a 7-step table on every
+// tap; that control is gone. What remains is the schedule, a night peek, and
+// an eased transition between levels.
 // ---------------------------------------------------------------------------
-static const uint8_t bright_table[] = {255, 180, 120, 70, 35, 10, 0};
-static const int BRIGHT_STEPS = sizeof(bright_table) / sizeof(bright_table[0]);
+static float   current_duty = 0.0f;      // what the panel is showing
+static uint8_t target_duty  = BL_DAY_DUTY;
+static uint32_t last_fade_ms = 0;
 
-static int bright_idx = 0;          // current index into bright_table
-static bool was_daytime = true;     // edge detection for schedule transitions
+static bool was_daytime  = true;
+static bool last_daytime = true;         // sticky across NTP hiccups
 
-// Night peek state
 static bool peek_active = false;
 static unsigned long peek_deadline = 0;
 
-// ---------------------------------------------------------------------------
-// PWM helpers
-// ---------------------------------------------------------------------------
-static void set_brightness(uint8_t duty) {
-    ledcWrite(BL_PWM_CHANNEL, duty);
-}
-
-// ---------------------------------------------------------------------------
-// NTP / schedule
-// ---------------------------------------------------------------------------
-static bool ntp_started = false;
-
 static void ntp_init() {
     configTzTime("MST7", "pool.ntp.org");
-    ntp_started = true;
     Serial.println("NTP: configTzTime MST7");
 }
-
-static bool last_daytime = true;  // last known result (default daytime until NTP syncs)
 
 static bool is_daytime() {
     struct tm t;
     if (!getLocalTime(&t, 0)) {
-        return last_daytime;  // NTP glitch — return last known state, not "true"
+        return last_daytime;  // NTP glitch — hold the last known state
     }
     int mins = t.tm_hour * 60 + t.tm_min;
-    int on_mins  = SCHEDULE_ON_HOUR * 60 + SCHEDULE_ON_MIN;   // 7:30 = 450
-    int off_mins = SCHEDULE_OFF_HOUR * 60 + SCHEDULE_OFF_MIN; // 23:00 = 1380
+    int on_mins  = SCHEDULE_ON_HOUR * 60 + SCHEDULE_ON_MIN;
+    int off_mins = SCHEDULE_OFF_HOUR * 60 + SCHEDULE_OFF_MIN;
     last_daytime = (mins >= on_mins && mins < off_mins);
     return last_daytime;
 }
 
 // ---------------------------------------------------------------------------
-// LVGL tap overlay — invisible full-screen clickable object
+// Eased fade toward the target, stepped from loop()
 // ---------------------------------------------------------------------------
-static lv_obj_t *tap_overlay = NULL;
+static void fade_step() {
+    uint32_t now = millis();
+    if (last_fade_ms == 0) last_fade_ms = now;
+    uint32_t dt = now - last_fade_ms;
+    if (dt == 0) return;
+    last_fade_ms = now;
 
+    float target = (float)target_duty;
+    if (current_duty == target) return;
+
+    float max_step = 255.0f * (float)dt / (float)BL_FADE_MS;
+    float delta = target - current_duty;
+
+    // Ease out: approach the target asymptotically, but never slower than a
+    // floor step so the fade always finishes.
+    float step = delta * 0.12f;
+    if (fabsf(step) < max_step * 0.15f) step = (delta > 0 ? 1.0f : -1.0f) * max_step * 0.15f;
+    if (fabsf(step) > max_step) step = (delta > 0 ? 1.0f : -1.0f) * max_step;
+
+    if (fabsf(delta) <= fabsf(step)) current_duty = target;
+    else current_duty += step;
+
+    ledcWrite(BL_PWM_CHANNEL, (uint8_t)(current_duty + 0.5f));
+}
+
+// ---------------------------------------------------------------------------
+// Tap: refresh data by day, peek at the scope by night.
+// ---------------------------------------------------------------------------
 static void tap_event_cb(lv_event_t *e) {
     (void)e;
-    lv_point_t pt;
-    lv_indev_get_point(lv_indev_get_act(), &pt);
-
-    if (pt.x < SCREEN_W / 3 && pt.y < SCREEN_H / 3) {
-        // Upper-left 1/3 zone → toggle roads overlay
-        ambient_toggle_roads();
-    } else if (pt.x < SCREEN_W / 3 && pt.y > SCREEN_H * 2 / 3) {
-        // Lower-left 1/3 zone → radius cycling
-        ambient_cycle_radius();
-    } else {
-        backlight_on_tap();
-    }
+    backlight_on_tap();
 }
 
 static void create_tap_overlay() {
-    tap_overlay = lv_obj_create(lv_scr_act());
+    lv_obj_t *tap_overlay = lv_obj_create(lv_scr_act());
     lv_obj_remove_style_all(tap_overlay);
     lv_obj_set_size(tap_overlay, SCREEN_W, SCREEN_H);
     lv_obj_set_pos(tap_overlay, 0, 0);
     lv_obj_set_style_bg_opa(tap_overlay, LV_OPA_TRANSP, 0);
     lv_obj_add_flag(tap_overlay, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(tap_overlay, tap_event_cb, LV_EVENT_CLICKED, NULL);
-    Serial.println("Backlight: tap overlay created");
 }
 
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 void backlight_init() {
-    // Set up LEDC PWM (ESP32 Arduino core 2.x API)
     ledcSetup(BL_PWM_CHANNEL, BL_PWM_FREQ, BL_PWM_RESOLUTION);
     ledcAttachPin(BL_PIN, BL_PWM_CHANNEL);
 
-    // Start NTP
     ntp_init();
 
-    // Initial state: 100% brightness
-    bright_idx = 0;
-    was_daytime = true;
-    set_brightness(bright_table[bright_idx]);
-    Serial.printf("Backlight: PWM init, duty=%d\r\n", bright_table[bright_idx]);
+    // Fade up from black on boot rather than snapping on.
+    current_duty = 0.0f;
+    target_duty  = BL_DAY_DUTY;
+    was_daytime  = true;
+    last_fade_ms = millis();
+    ledcWrite(BL_PWM_CHANNEL, 0);
 
-    // Create tap overlay on top of canvas (must be called after ambient_init)
     create_tap_overlay();
+    Serial.println("Backlight: scheduled, fading up");
 }
 
 void backlight_on_tap() {
-    bool day = is_daytime();
+    if (is_daytime()) {
+        network_boost_polling();
+        return;
+    }
 
-    if (day) {
-        // Cycle through brightness steps, wrap to 100%
-        bright_idx = (bright_idx + 1) % BRIGHT_STEPS;
-        set_brightness(bright_table[bright_idx]);
-        Serial.printf("Backlight: tap (day) → step %d, duty=%d\r\n",
-                      bright_idx, bright_table[bright_idx]);
-        if (bright_table[bright_idx] > 0) network_boost_polling();
+    if (peek_active || target_duty > 0) {
+        target_duty = BL_NIGHT_DUTY;
+        peek_active = false;
     } else {
-        // Night mode
-        if (bright_table[bright_idx] > 0 || peek_active) {
-            // Screen is on (or peeking) — turn off immediately
-            bright_idx = BRIGHT_STEPS - 1;  // Off
-            set_brightness(0);
-            peek_active = false;
-            Serial.println("Backlight: tap (night, on) → off");
-        } else {
-            // Screen is off — peek at 5% for 15s
-            bright_idx = BRIGHT_STEPS - 2;  // 5% = duty 13
-            set_brightness(bright_table[bright_idx]);
-            peek_active = true;
-            peek_deadline = millis() + NIGHT_PEEK_MS;
-            Serial.println("Backlight: tap (night, off) → peek 5%");
-            network_boost_polling();
-        }
+        target_duty = BL_PEEK_DUTY;
+        peek_active = true;
+        peek_deadline = millis() + NIGHT_PEEK_MS;
+        network_boost_polling();
     }
 }
 
 void backlight_update() {
     bool day = is_daytime();
 
-    // Edge detection: schedule transitions
     if (day && !was_daytime) {
-        // Night → Day: turn on at 100%
-        bright_idx = 0;
-        set_brightness(bright_table[bright_idx]);
+        target_duty = BL_DAY_DUTY;
         peek_active = false;
-        Serial.println("Backlight: night→day, 100%");
+        Serial.println("Backlight: night -> day");
     } else if (!day && was_daytime) {
-        // Day → Night: turn off
-        bright_idx = BRIGHT_STEPS - 1;
-        set_brightness(0);
+        target_duty = BL_NIGHT_DUTY;
         peek_active = false;
-        Serial.println("Backlight: day→night, off");
+        Serial.println("Backlight: day -> night");
     }
     was_daytime = day;
 
-    // Night peek auto-off
     if (peek_active && millis() >= peek_deadline) {
-        bright_idx = BRIGHT_STEPS - 1;
-        set_brightness(0);
+        target_duty = BL_NIGHT_DUTY;
         peek_active = false;
-        Serial.println("Backlight: peek expired, off");
     }
+
+    fade_step();
 }

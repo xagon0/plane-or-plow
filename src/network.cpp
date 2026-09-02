@@ -67,18 +67,26 @@ static void cancel_boost() {
 // ---------------------------------------------------------------------------
 // Tracked vehicle helpers
 // ---------------------------------------------------------------------------
-#define AGE_OUT_POLLS 5  // remove after 5 missed polls (~7.5 min normal)
+#define AGE_OUT_POLLS 5  // remove after 5 missed polls
 
 // Temp struct for incoming poll results before merging into TrackedVehicle[]
 struct IncomingVehicle {
-    char id[12];
+    char  id[10];
+    char  label[10];
     float lat;
     float lon;
+    float heading_deg;   // <0 = unknown
+    float speed_kts;     // 0 = unknown
+    int32_t alt_ft;      // <0 = unknown / on ground
     float dist_km;
 };
 
+// `seed_trail` is true for vehicles the renderer does not interpolate (plows):
+// their trail advances one point per fix. Aircraft sample their own trail from
+// the dead-reckoned position instead, so pushing here would double up.
 static void update_tracked_vehicles(TrackedVehicle *tracked, int &count,
-                                     const IncomingVehicle *incoming, int n_incoming) {
+                                     const IncomingVehicle *incoming, int n_incoming,
+                                     bool seed_trail) {
     // 1. Increment age of all existing tracked vehicles
     for (int i = 0; i < count; i++) {
         tracked[i].age++;
@@ -95,29 +103,32 @@ static void update_tracked_vehicles(TrackedVehicle *tracked, int &count,
             }
         }
 
-        if (found >= 0) {
-            // Existing vehicle — append position to ring buffer, reset age
-            TrackedVehicle &tv = tracked[found];
-            tv.dist_km = inc.dist_km;
-            tv.age = 0;
-            tv.trail_head = (tv.trail_head + 1) % MAX_TRAIL_PTS;
-            tv.trail[tv.trail_head].lat = inc.lat;
-            tv.trail[tv.trail_head].lon = inc.lon;
-            if (tv.trail_count < MAX_TRAIL_PTS) tv.trail_count++;
-        } else if (count < MAX_VEHICLES) {
-            // New vehicle — create entry
+        bool is_new = false;
+        if (found < 0) {
+            if (count >= MAX_VEHICLES) continue;
+            // New contact — seed the trail with its first fix.
             TrackedVehicle &tv = tracked[count];
             memset(&tv, 0, sizeof(TrackedVehicle));
             strncpy(tv.id, inc.id, sizeof(tv.id) - 1);
-            tv.id[sizeof(tv.id) - 1] = '\0';
-            tv.dist_km = inc.dist_km;
-            tv.age = 0;
-            tv.trail_head = 0;
-            tv.trail[0].lat = inc.lat;
-            tv.trail[0].lon = inc.lon;
-            tv.trail_count = 1;
+            trail_push(tv, inc.lat, inc.lon);
+            found = count;
             count++;
+            is_new = true;
         }
+
+        TrackedVehicle &tv = tracked[found];
+        strncpy(tv.label, inc.label, sizeof(tv.label) - 1);
+        tv.label[sizeof(tv.label) - 1] = '\0';
+        tv.lat         = inc.lat;
+        tv.lon         = inc.lon;
+        tv.heading_deg = inc.heading_deg;
+        tv.speed_kts   = inc.speed_kts;
+        tv.alt_ft      = inc.alt_ft;
+        tv.dist_km     = inc.dist_km;
+        tv.fix_ms      = millis();
+        tv.age         = 0;
+
+        if (seed_trail && !is_new) trail_push(tv, inc.lat, inc.lon);
     }
 
     // 3. Age-out vehicles not seen for AGE_OUT_POLLS — compact in-place
@@ -129,6 +140,17 @@ static void update_tracked_vehicles(TrackedVehicle *tracked, int &count,
         }
     }
     count = write;
+}
+
+// Callsigns come back padded ("WJA231  "); trim so the readout sits tight.
+static void copy_trimmed(char *dst, size_t n, const char *src) {
+    size_t o = 0;
+    for (size_t i = 0; src[i] && o < n - 1; i++) {
+        if (src[i] == ' ' && o == 0) continue;   // leading
+        dst[o++] = src[i];
+    }
+    while (o > 0 && dst[o - 1] == ' ') o--;      // trailing
+    dst[o] = '\0';
 }
 
 // ---------------------------------------------------------------------------
@@ -173,7 +195,6 @@ static bool poll_airplanes() {
 
     JsonArray ac = doc["ac"];
 
-    // Collect incoming vehicles into temp array
     IncomingVehicle incoming[MAX_VEHICLES];
     int n_incoming = 0;
 
@@ -185,22 +206,34 @@ static bool poll_airplanes() {
         float lat = a["lat"];
         float lon = a["lon"];
         float dist = (float)haversine_km(HOME_LAT, HOME_LON, lat, lon);
+        if (dist > radius_km) continue;
 
-        if (dist <= radius_km) {
-            IncomingVehicle &iv = incoming[n_incoming];
-            strncpy(iv.id, a["hex"].as<const char *>(), sizeof(iv.id) - 1);
-            iv.id[sizeof(iv.id) - 1] = '\0';
-            iv.lat = lat;
-            iv.lon = lon;
-            iv.dist_km = dist;
-            n_incoming++;
+        IncomingVehicle &iv = incoming[n_incoming];
+        memset(&iv, 0, sizeof(iv));
+        strncpy(iv.id, a["hex"].as<const char *>(), sizeof(iv.id) - 1);
+        iv.id[sizeof(iv.id) - 1] = '\0';
+
+        if (a["flight"].is<const char *>()) {
+            copy_trimmed(iv.label, sizeof(iv.label), a["flight"].as<const char *>());
         }
+
+        iv.lat = lat;
+        iv.lon = lon;
+        iv.dist_km = dist;
+        // `track` is the true ground track; without it the renderer falls back
+        // to inferring heading from the trail.
+        iv.heading_deg = a["track"].is<float>() ? (float)a["track"] : -1.0f;
+        iv.speed_kts   = a["gs"].is<float>()    ? (float)a["gs"]    :  0.0f;
+        // alt_baro is the string "ground" for taxiing aircraft.
+        iv.alt_ft      = a["alt_baro"].is<int>() ? (int32_t)a["alt_baro"] : -1;
+
+        n_incoming++;
     }
 
     update_tracked_vehicles(proximity.aircraft, proximity.aircraft_count,
-                            incoming, n_incoming);
+                            incoming, n_incoming, false);
 
-    Serial.printf("Airplanes: %d in API, %d incoming, %d tracked\r\n",
+    Serial.printf("Airplanes: %d in API, %d in range, %d tracked\r\n",
                   (int)ac.size(), n_incoming, proximity.aircraft_count);
     return proximity.aircraft_count > 0;
 }
@@ -237,8 +270,6 @@ static bool poll_snowplows() {
     String payload = http.getString();
     http.end();
 
-    Serial.printf("Plow response: %d bytes, starts: %.80s\r\n", payload.length(), payload.c_str());
-
     JsonDocument doc;
     DeserializationError err = deserializeJson(doc, payload);
     if (err) {
@@ -249,7 +280,6 @@ static bool poll_snowplows() {
     JsonArray vehicles = doc["item2"];
     int total = vehicles.size();
 
-    // Collect incoming vehicles into temp array
     IncomingVehicle incoming[MAX_VEHICLES];
     int n_incoming = 0;
 
@@ -262,42 +292,53 @@ static bool poll_snowplows() {
         float lat = loc[0];
         float lon = loc[1];
         float dist = (float)haversine_km(HOME_LAT, HOME_LON, lat, lon);
+        if (dist > radius_km) continue;
 
-        if (dist <= radius_km) {
-            IncomingVehicle &iv = incoming[n_incoming];
-            // itemId is an integer — convert to string
-            snprintf(iv.id, sizeof(iv.id), "%d", v["itemId"].as<int>());
-            iv.lat = lat;
-            iv.lon = lon;
-            iv.dist_km = dist;
-            n_incoming++;
-        }
+        IncomingVehicle &iv = incoming[n_incoming];
+        memset(&iv, 0, sizeof(iv));
+        // itemId is an integer — convert to string
+        snprintf(iv.id, sizeof(iv.id), "%d", v["itemId"].as<int>());
+        iv.lat = lat;
+        iv.lon = lon;
+        iv.dist_km = dist;
+        // The 511 feed carries no course or speed, so plows are never
+        // extrapolated; the renderer infers a heading from their trail.
+        iv.heading_deg = -1.0f;
+        iv.speed_kts   = 0.0f;
+        iv.alt_ft      = -1;
+
+        n_incoming++;
     }
 
     update_tracked_vehicles(proximity.plows, proximity.plow_count,
-                            incoming, n_incoming);
+                            incoming, n_incoming, true);
 
-    Serial.printf("Snowplows: %d total, %d incoming, %d tracked\r\n",
+    Serial.printf("Snowplows: %d total, %d in range, %d tracked\r\n",
                   total, n_incoming, proximity.plow_count);
     return proximity.plow_count > 0;
 }
 
 // ---------------------------------------------------------------------------
-// Poll timer — alternates airplane / snowplow each cycle
+// Poll timer.
+//
+// Aircraft are polled three ticks out of four: they are the fast-moving thing
+// on screen, and the shorter the gap between fixes the less the renderer has
+// to extrapolate. Plows move at plow speed and are happy with every 4th tick.
 // ---------------------------------------------------------------------------
 static uint32_t poll_cycle = 0;
 
 static void poll_tick_cb(lv_timer_t *timer) {
+    (void)timer;
+
     // Check if boost period has expired
     if (boost_deadline && millis() > boost_deadline) {
         boost_deadline = 0;
         lv_timer_set_period(poll_timer, API_POLL_MS);
-        Serial.println("Boost polling: expired, back to 45s");
+        Serial.println("Boost polling: expired");
     }
 
     wifi_ensure();
     if (!wifi_connected) {
-        // No WiFi → clear everything
         proximity.airplane_nearby = false;
         proximity.snowplow_nearby = false;
         proximity.aircraft_count = 0;
@@ -305,17 +346,13 @@ static void poll_tick_cb(lv_timer_t *timer) {
         return;
     }
 
-    if (poll_cycle % 2 == 0) {
-        proximity.airplane_nearby = poll_airplanes();
-    } else {
+    if (poll_cycle % 4 == 3) {
         proximity.snowplow_nearby = poll_snowplows();
+    } else {
+        proximity.airplane_nearby = poll_airplanes();
     }
 
     poll_cycle++;
-
-    Serial.printf("State: airplane=%s, snowplow=%s\r\n",
-                  proximity.airplane_nearby ? "YES" : "no",
-                  proximity.snowplow_nearby ? "YES" : "no");
 }
 
 // ---------------------------------------------------------------------------
@@ -326,21 +363,6 @@ void network_init() {
     WiFi.setAutoReconnect(true);
     delay(100);
 
-    // Quick scan to verify network is visible
-    Serial.println("Scanning WiFi networks...");
-    int n = WiFi.scanNetworks();
-    Serial.printf("Found %d networks:\r\n", n);
-    bool found = false;
-    for (int i = 0; i < n; i++) {
-        Serial.printf("  [%d] %s (RSSI %d, ch %d)\r\n", i, WiFi.SSID(i).c_str(), WiFi.RSSI(i), WiFi.channel(i));
-        if (WiFi.SSID(i) == WIFI_SSID) found = true;
-    }
-    WiFi.scanDelete();
-
-    if (!found) {
-        Serial.printf("WARNING: SSID '%s' not found in scan!\r\n", WIFI_SSID);
-    }
-
     Serial.printf("WiFi connecting to %s...\r\n", WIFI_SSID);
     WiFi.begin(WIFI_SSID, WIFI_PASS);
 
@@ -348,26 +370,27 @@ void network_init() {
     int attempts = 0;
     while (WiFi.status() != WL_CONNECTED && attempts < 30) {
         delay(500);
-        Serial.printf(".");
+        Serial.print(".");
         attempts++;
     }
     Serial.println();
 
     if (WiFi.status() == WL_CONNECTED) {
         wifi_connected = true;
-        Serial.printf("WiFi connected: %s (RSSI %d)\r\n", WiFi.localIP().toString().c_str(), WiFi.RSSI());
+        Serial.printf("WiFi connected: %s (RSSI %d)\r\n",
+                      WiFi.localIP().toString().c_str(), WiFi.RSSI());
     } else {
-        Serial.printf("WiFi not connected (status=%d), will retry in background\r\n", WiFi.status());
+        Serial.printf("WiFi not connected (status=%d), will retry in background\r\n",
+                      WiFi.status());
     }
 
-    // Start poll timer
     poll_timer = lv_timer_create(poll_tick_cb, API_POLL_MS, NULL);
 
     Serial.println("Network initialized");
 }
 
 // ---------------------------------------------------------------------------
-// Boost polling — 30s per source for 3 minutes after user interaction
+// Boost polling — faster ticks for a few minutes after a tap
 // ---------------------------------------------------------------------------
 void network_boost_polling() {
     if (!poll_timer) return;
@@ -376,8 +399,6 @@ void network_boost_polling() {
     lv_timer_set_period(poll_timer, BOOST_POLL_MS);
     if (!already_boosting) {
         lv_timer_ready(poll_timer);  // immediate poll only on first tap
-        Serial.println("Boost polling: ON (15s ticks for 180s)");
-    } else {
-        Serial.println("Boost polling: extended");
+        Serial.println("Boost polling: ON");
     }
 }
