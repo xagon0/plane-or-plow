@@ -3,11 +3,20 @@
 #include <Wire.h>
 #include <TAMC_GT911.h>
 #include <lvgl.h>
+#include <esp_system.h>
 
 #include "config.h"
 #include "network.h"
 #include "ambient.h"
 #include "backlight.h"
+
+// Every API fetch runs an mbedTLS handshake on the Arduino loop task, whose
+// stack defaults to 8 KB. Measured peak was ~6.3 KB of that, and a reconnect
+// takes the deepest path because it cannot resume a TLS session — too little
+// margin for three separate HTTPS clients. This macro overrides the weak
+// getArduinoLoopTaskStackSize() in the framework; a -D build flag does not
+// work, because the framework archive is cached and not rebuilt.
+SET_LOOP_TASK_STACK_SIZE(16384);
 
 // --- Pin Definitions ---
 #define TFT_CS    39
@@ -81,6 +90,27 @@ void lvgl_touchpad_read(lv_indev_drv_t *indev, lv_indev_data_t *data) {
 void setup() {
     Serial.begin(115200);
     Serial.println("ESP32-4848S040 LVGL Setup");
+
+    // Why the last run ended. A panic or watchdog reset survives the reboot in
+    // RTC memory, so an unattended crash stays diagnosable after the fact.
+    {
+        esp_reset_reason_t r = esp_reset_reason();
+        const char *why = "?";
+        switch (r) {
+            case ESP_RST_POWERON:   why = "power-on";           break;
+            case ESP_RST_EXT:       why = "external reset";     break;
+            case ESP_RST_SW:        why = "software restart";   break;
+            case ESP_RST_PANIC:     why = "PANIC / exception";  break;
+            case ESP_RST_INT_WDT:   why = "interrupt watchdog"; break;
+            case ESP_RST_TASK_WDT:  why = "task watchdog";      break;
+            case ESP_RST_WDT:       why = "other watchdog";     break;
+            case ESP_RST_BROWNOUT:  why = "BROWNOUT (power)";   break;
+            case ESP_RST_DEEPSLEEP: why = "deep sleep wake";    break;
+            default: break;
+        }
+        Serial.printf("Reset reason: %d (%s)   free heap %u\r\n",
+                      (int)r, why, (unsigned)ESP.getFreeHeap());
+    }
 
     // Initialize display
     if (!gfx->begin()) {

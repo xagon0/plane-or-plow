@@ -70,7 +70,7 @@ static bool fetch_tile(uint8_t *dst, int n, float box_km, const char *iso_time) 
     float dlon = box_km / (111.32f * cosf((float)HOME_LAT * (float)M_PI / 180.0f));
 
     // WMS 1.3.0 with EPSG:4326 takes bbox in lat,lon order.
-    char url[512];
+    static char url[512];
     int len = snprintf(url, sizeof(url),
         "%s?service=WMS&version=1.3.0&request=GetMap"
         "&layers=%s&styles=%s&crs=EPSG:4326"
@@ -114,15 +114,38 @@ static bool fetch_tile(uint8_t *dst, int n, float box_km, const char *iso_time) 
     pngle_set_draw_callback(pngle, png_draw_cb);
 
     WiFiClient *stream = http.getStreamPtr();
-    uint8_t buf[512];
-    char head[161]; int head_len = 0; head[0] = 0;
+    // Static, not stack: this runs on the Arduino loop task alongside an
+    // mbedTLS handshake, and 1.2 KB of locals here is a meaningful slice.
+    static uint8_t buf[512];
+    static char head[161];
+    head[0] = 0;
+    int head_len = 0;
     int total = 0;
     bool ok = true;
     int remaining = http.getSize();
 
+    // Both bounds matter. This loop runs inside an LVGL timer callback, so
+    // every millisecond spent here is a millisecond the display is frozen.
+    const uint32_t started = millis();
+    uint32_t last_data = started;
+
     while (http.connected() && (remaining > 0 || remaining == -1)) {
+        if (millis() - started > WX_READ_MS) {
+            Serial.println("Radar: read exceeded budget, abandoning tile");
+            ok = false;
+            break;
+        }
         size_t avail = stream->available();
-        if (!avail) { delay(2); if (++total > 100000) break; continue; }
+        if (!avail) {
+            if (millis() - last_data > WX_STALL_MS) {
+                Serial.println("Radar: stream stalled, abandoning tile");
+                ok = false;
+                break;
+            }
+            delay(2);
+            continue;
+        }
+        last_data = millis();
         int got = stream->readBytes(buf, avail > sizeof(buf) ? sizeof(buf) : avail);
         if (got <= 0) break;
         total += got;
@@ -145,8 +168,12 @@ static bool fetch_tile(uint8_t *dst, int n, float box_km, const char *iso_time) 
 
     wx_debug = false;
     if (ok) {
-        Serial.printf("Radar tile %dx%d (%.0fkm): %d bytes, %lu cells with echo\r\n",
-                      n, n, box_km * 2.0f, total, (unsigned long)decode_hits);
+        Serial.printf("Radar tile %dx%d (%.0fkm): %d bytes, %lu cells, %lu ms, "
+                      "heap %u, stack left %u\r\n",
+                      n, n, box_km * 2.0f, total, (unsigned long)decode_hits,
+                      (unsigned long)(millis() - started),
+                      (unsigned)ESP.getFreeHeap(),
+                      (unsigned)uxTaskGetStackHighWaterMark(NULL));
     }
     return ok;
 }

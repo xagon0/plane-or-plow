@@ -58,6 +58,8 @@
 #define WX_BOX_KM         16.5f     // half-width of the fetched bbox
 #define WX_POLL_MS        360000UL  // 6 min, matching the scan cadence
 #define WX_TICK_MS        20000     // how often we re-evaluate what to fetch
+#define WX_READ_MS        9000      // hard ceiling on one tile read
+#define WX_STALL_MS       2500      // give up if the stream goes quiet this long
 #define WX_WIDE_POLL_MS   720000UL  // 12 min; the wide picture changes slowly
 #define WX_HISTORY        10        // frames kept for the replay loop
 #define WX_REPLAY_STEP_MS 320       // per frame during a replay
