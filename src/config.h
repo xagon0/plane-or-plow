@@ -1,7 +1,11 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
+#if __has_include("secrets.h")
 #include "secrets.h"
+#else
+#error "src/secrets.h is missing. Create it with:  python3 tools/configure.py --address \"Your Town\" --ssid YourWiFi --password YourPassword   (see README.md)"
+#endif
 
 // WIFI_SSID / WIFI_PASS / HOME_NAME / HOME_LAT / HOME_LON / RADIUS_KM / HOME_TZ
 // all come from secrets.h, which is gitignored. See secrets.h.example.
