@@ -39,10 +39,12 @@ static const RGB C_PULSE       = { 64, 148, 194 };
 // Home
 static const RGB C_HOME        = {190, 230, 255 };
 
-// Contacts
-static const RGB C_AIR_CORE    = {170, 226, 255 };
-static const RGB C_AIR_GLOW    = { 46, 136, 224 };
-static const RGB C_AIR_TRAIL   = { 58, 146, 226 };
+// Contacts. Aircraft sit near hue 165: clear of the amber plows at 35, clear of
+// the precipitation ramp's pink top end near 325, and clear of the Bow River at
+// 205 — which the old aircraft cyan shared, separated only by brightness.
+static const RGB C_AIR_CORE    = {170, 255, 227 };
+static const RGB C_AIR_GLOW    = { 19, 251, 211 };
+static const RGB C_AIR_TRAIL   = { 33, 251, 210 };
 
 static const RGB C_PLOW_CORE   = {255, 214, 158 };
 static const RGB C_PLOW_GLOW   = {228, 138,  28 };
@@ -78,7 +80,7 @@ static const RGB C_INBOUND     = {150, 190, 240 };
 static const RGB C_TEXT        = {154, 192, 216 };
 static const RGB C_TEXT_DIM    = { 68,  94, 114 };
 static const RGB C_TEXT_FAINT  = { 44,  62,  78 };
-static const RGB C_TEXT_AIR    = {126, 196, 244 };
+static const RGB C_TEXT_AIR    = {115, 255, 219 };
 static const RGB C_TEXT_PLOW   = {242, 174,  86 };
 static const RGB C_TEXT_ALERT  = {226,  96,  84 };
 
