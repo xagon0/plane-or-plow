@@ -9,6 +9,7 @@
 #include "network.h"
 #include "ambient.h"
 #include "backlight.h"
+#include "status.h"
 
 // Every API fetch runs an mbedTLS handshake on the Arduino loop task, whose
 // stack defaults to 8 KB. Measured peak was ~6.3 KB of that, and a reconnect
@@ -91,26 +92,7 @@ void setup() {
     Serial.begin(115200);
     Serial.println("ESP32-4848S040 LVGL Setup");
 
-    // Why the last run ended. A panic or watchdog reset survives the reboot in
-    // RTC memory, so an unattended crash stays diagnosable after the fact.
-    {
-        esp_reset_reason_t r = esp_reset_reason();
-        const char *why = "?";
-        switch (r) {
-            case ESP_RST_POWERON:   why = "power-on";           break;
-            case ESP_RST_EXT:       why = "external reset";     break;
-            case ESP_RST_SW:        why = "software restart";   break;
-            case ESP_RST_PANIC:     why = "PANIC / exception";  break;
-            case ESP_RST_INT_WDT:   why = "interrupt watchdog"; break;
-            case ESP_RST_TASK_WDT:  why = "task watchdog";      break;
-            case ESP_RST_WDT:       why = "other watchdog";     break;
-            case ESP_RST_BROWNOUT:  why = "BROWNOUT (power)";   break;
-            case ESP_RST_DEEPSLEEP: why = "deep sleep wake";    break;
-            default: break;
-        }
-        Serial.printf("Reset reason: %d (%s)   free heap %u\r\n",
-                      (int)r, why, (unsigned)ESP.getFreeHeap());
-    }
+    status_boot_report();
 
     // Initialize display
     if (!gfx->begin()) {
@@ -179,12 +161,15 @@ void setup() {
     }
 
     network_init();
+    status_init();
 
-    Serial.println("Airplane or Snowplow — scope ready");
+    status_mark_settled();
+    Serial.println("Plane or Plow — scope ready");
 }
 
 void loop() {
     lv_timer_handler();
     backlight_update();
+    status_update();
     delay(5);
 }

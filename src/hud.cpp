@@ -123,7 +123,7 @@ void hud_init() {
     // Top strip — above the scope rim.
     lbl_title = make_label(&lv_font_montserrat_14, C_TEXT_FAINT, 4,
                            LV_ALIGN_TOP_MID, 0, 2);
-    lv_label_set_text(lbl_title, "AIRPLANE OR SNOWPLOW");
+    lv_label_set_text(lbl_title, "PLANE OR PLOW");
 
     // Upper corners — caption above the count. The caption is the wide part,
     // so it goes where the corner is widest; the narrow numeral drops into the

@@ -1,6 +1,7 @@
 #include "network.h"
 #include "config.h"
 #include "ambient.h"
+#include "status.h"
 #include <Arduino.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
@@ -46,6 +47,7 @@ static void wifi_ensure() {
     if (now - last_reconnect_ms < RECONNECT_INTERVAL_MS) return;
     last_reconnect_ms = now;
 
+    stats.wifi_reconnects++;
     Serial.printf("WiFi reconnecting (status=%d)...\r\n", WiFi.status());
     WiFi.disconnect(true);
     delay(100);
@@ -179,6 +181,7 @@ static bool poll_airplanes() {
     }
     if (code != 200) {
         Serial.printf("Airplane API HTTP %d\r\n", code);
+        stats.air_fail++;
         http.end();
         return false;
     }
@@ -233,6 +236,7 @@ static bool poll_airplanes() {
     update_tracked_vehicles(proximity.aircraft, proximity.aircraft_count,
                             incoming, n_incoming, false);
 
+    stats.air_ok++;
     Serial.printf("Airplanes: %d in API, %d in range, %d tracked\r\n",
                   (int)ac.size(), n_incoming, proximity.aircraft_count);
     return proximity.aircraft_count > 0;
@@ -263,6 +267,7 @@ static bool poll_snowplows() {
     }
     if (code != 200) {
         Serial.printf("Plow API HTTP %d\r\n", code);
+        stats.plow_fail++;
         http.end();
         return false;
     }
@@ -313,6 +318,7 @@ static bool poll_snowplows() {
     update_tracked_vehicles(proximity.plows, proximity.plow_count,
                             incoming, n_incoming, true);
 
+    stats.plow_ok++;
     Serial.printf("Snowplows: %d total, %d in range, %d tracked\r\n",
                   total, n_incoming, proximity.plow_count);
     return proximity.plow_count > 0;

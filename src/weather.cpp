@@ -2,6 +2,7 @@
 #include "config.h"
 #include "ambient.h"
 #include "wx_ramp.h"
+#include "status.h"
 #include <Arduino.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
@@ -99,6 +100,7 @@ static bool fetch_tile(uint8_t *dst, int n, float box_km, const char *iso_time) 
     if (code != 200) {
         Serial.printf("Radar HTTP %d\r\n", code);
         Serial.printf("  url: %s\r\n", url);
+        stats.radar_failures++;
         http.end();
         return false;
     }
@@ -167,6 +169,10 @@ static bool fetch_tile(uint8_t *dst, int n, float box_km, const char *iso_time) 
     decode_dst = NULL;
 
     wx_debug = false;
+    stats.radar_fetches++;
+    if (!ok) stats.radar_failures++;
+    stats.radar_last_ms = millis() - started;
+    stats.radar_last_bytes = total;
     if (ok) {
         Serial.printf("Radar tile %dx%d (%.0fkm): %d bytes, %lu cells, %lu ms, "
                       "heap %u, stack left %u\r\n",

@@ -127,6 +127,9 @@ void backlight_on_tap() {
     }
 }
 
+uint8_t backlight_duty() { return (uint8_t)(current_duty + 0.5f); }
+bool    backlight_is_daytime() { return last_daytime; }
+
 void backlight_update() {
     bool day = is_daytime();
 
