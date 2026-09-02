@@ -1,18 +1,16 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
-// --- WiFi credentials (fill in your own) ---
-#define WIFI_SSID "your-network"
-#define WIFI_PASS "your-password"
+#include "secrets.h"
 
-// --- Home location (configure with tools/configure.py) ---
-#define HOME_LAT 51.0447
-#define HOME_LON -114.0719
-#define RADIUS_KM 15.0
+// WIFI_SSID / WIFI_PASS / HOME_NAME / HOME_LAT / HOME_LON / RADIUS_KM / HOME_TZ
+// all come from secrets.h, which is gitignored. See secrets.h.example.
 
 // --- API endpoints ---
-#define AIRPLANE_API_BASE "https://api.airplanes.live/v2/point/51.0447/-114.0719/"
-#define PLOW_API_URL     "https://511.alberta.ca/map/mapIcons/ServiceVehicles"
+// The aircraft query is built at runtime from HOME_LAT/HOME_LON so that moving
+// the scope actually moves the query. Radius is appended in nautical miles.
+#define AIRPLANE_API_HOST "https://api.airplanes.live/v2/point"
+#define PLOW_API_URL      "https://511.alberta.ca/map/mapIcons/ServiceVehicles"
 
 // --- Timing ---
 // Aircraft take 3 of every 4 ticks, plows the 4th: aircraft refresh ~27s,

@@ -1,26 +1,34 @@
-# Basemap generation
+# tools
 
-`src/roads_data.h` is generated, not hand-edited.
+## configure.py
 
-    curl -s https://overpass-api.de/api/interpreter --data-urlencode data@q.overpass -o osm.json
-    python3 gen.py     # clip to 16.5 km, Douglas-Peucker, classify -> map.json
-    python3 emit.py    # -> src/roads_data.h
+Sets the scope's location and builds its basemap. This is the only setup step
+beyond flashing.
 
-Home is 51.0447, -114.0719 (the configured centre); it is hardcoded in both scripts and
-must match `HOME_LAT` / `HOME_LON` in `src/config.h`. Simplification tolerance is
-18-30 m by class against a scope that draws ~69 m per pixel, so it is sub-pixel.
+    python3 tools/configure.py --address "Cochrane, Alberta" --ssid Net --password pw
+    python3 tools/configure.py --lat 51.0447 --lon -114.0719 --radius 20
+    python3 tools/configure.py --skip-map --ssid NewNetwork --password newpw
 
-Map data (c) OpenStreetMap contributors, ODbL.
+Writes `src/secrets.h` and `src/roads_data.h`, both gitignored. Existing WiFi
+credentials are preserved if you don't pass new ones.
 
+Geometry comes from the Overpass API, clipped to 1.1x the scope radius and
+simplified with Douglas-Peucker at 18-40 m by class. The scope draws roughly
+69 m per pixel, so that is sub-pixel. Four classes are emitted in painter's
+order — water, minor roads, secondary, highways — and those enum values are
+defined once, in this script, because they have to match what the firmware
+indexes its palette with.
 
-# Weather radar palette
+Dense cities produce large basemaps: central Calgary at 15 km is about 44,000
+points, where a town like Cochrane is about 6,500. Raise `--radius` with that
+in mind.
 
-`src/wx_ramp.h` is generated too:
+The public Overpass endpoint is rate limited and returns 504s under load; the
+script retries three times.
+
+## wx_ramp.py
+
+Regenerates `src/wx_ramp.h` from Environment Canada's GeoMet legend. Only
+needed if EC changes the radar palette.
 
     python3 tools/wx_ramp.py
-
-It samples Environment Canada's GeoMet legend for RADAR_1KM_RSNO. Rerun it only
-if EC changes the palette; the firmware uses it to map tile pixels back to an
-intensity.
-
-Radar data (c) Environment and Climate Change Canada, GeoMet open data.

@@ -162,10 +162,11 @@ static bool poll_airplanes() {
     WiFiClientSecure client;
     client.setInsecure();
 
-    // Build URL with radius in nautical miles (km / 1.852)
+    // Built from the configured centre, radius in nautical miles (km / 1.852).
     int radius_nm = (int)ceilf(radius_km / 1.852f);
-    char url[128];
-    snprintf(url, sizeof(url), "%s%d", AIRPLANE_API_BASE, radius_nm);
+    char url[160];
+    snprintf(url, sizeof(url), "%s/%.4f/%.4f/%d",
+             AIRPLANE_API_HOST, (double)HOME_LAT, (double)HOME_LON, radius_nm);
 
     HTTPClient http;
     http.begin(client, url);

@@ -1,4 +1,15 @@
+# Local configuration — never commit credentials or your home coordinates
+src/secrets.h
+
+# Generated from OpenStreetMap by tools/configure.py; location-specific and large
+src/roads_data.h
+
+# Build output
 .pio/
 .vscode/
 *.bin
 *.elf
+
+# Scratch
+__pycache__/
+*.pyc

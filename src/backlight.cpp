@@ -23,8 +23,8 @@ static bool peek_active = false;
 static unsigned long peek_deadline = 0;
 
 static void ntp_init() {
-    configTzTime("MST7", "pool.ntp.org");
-    Serial.println("NTP: configTzTime MST7");
+    configTzTime(HOME_TZ, "pool.ntp.org");
+    Serial.printf("NTP: configTzTime %s\r\n", HOME_TZ);
 }
 
 static bool is_daytime() {
