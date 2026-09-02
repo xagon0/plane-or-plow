@@ -193,7 +193,9 @@ static void draw_scope_furniture() {
 // reads correctly as "range", and costs one ring per frame instead of a
 // per-pixel wedge.
 // ---------------------------------------------------------------------------
-#define PULSE_PERIOD_MS 5200.0f
+// Two pulses run half a cycle apart, so a ring launches every PERIOD/2 —
+// 4.25 s at this setting — and crawls outward at about 26 px/s.
+#define PULSE_PERIOD_MS 8500.0f
 #define PULSE_COUNT     2
 
 static float pulse_prev_r[PULSE_COUNT] = {0};
