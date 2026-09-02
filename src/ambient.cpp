@@ -127,6 +127,9 @@ static void draw_map() {
     // highways on top.
     const RGB   cls_col[4] = { C_MAP_WATER, C_MAP_MINOR, C_MAP_ROAD, C_MAP_MAJOR };
     const float cls_w[4]   = { 1.7f,        1.0f,        1.4f,       1.9f        };
+    // Alpha, not colour, sets how much of the map you notice. Residential sits
+    // at ~10% so the towns read as texture rather than as drawn lines.
+    const uint8_t cls_a[4] = { 165,         26,          40,         62          };
 
     for (int w = 0; w < MAP_WAY_COUNT; w++) {
         const MapWay &way = map_ways[w];
@@ -134,13 +137,14 @@ static void draw_map() {
         const MapPt *pts = &map_pts[way.start];
         const RGB col = cls_col[way.cls];
         const float wid = cls_w[way.cls];
+        const uint8_t alpha = cls_a[way.cls];
 
         float x0, y0;
         latlon_to_screen(pts[0].lat, pts[0].lon, x0, y0);
         for (int i = 1; i < (int)way.count; i++) {
             float x1, y1;
             latlon_to_screen(pts[i].lat, pts[i].lon, x1, y1);
-            gfx_stroke(bg_buf, x0, y0, x1, y1, col, 255, wid);
+            gfx_stroke(bg_buf, x0, y0, x1, y1, col, alpha, wid);
             x0 = x1; y0 = y1;
         }
     }

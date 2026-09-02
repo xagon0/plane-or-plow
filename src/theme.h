@@ -18,11 +18,14 @@ static const RGB C_BG_CENTER   = { 11,  22,  31 };   // beneath the scope
 static const RGB C_BG_EDGE     = {  3,   6,  10 };   // scope rim
 static const RGB C_BG_CORNER   = {  2,   3,   5 };   // outside the scope
 
-// Map geometry, dimmest to brightest. Indexed by MAP_* class in roads_data.h.
-static const RGB C_MAP_WATER   = { 16,  60,  92 };   // Bow River, creeks, lakes
-static const RGB C_MAP_MINOR   = { 17,  27,  35 };   // residential, range roads
-static const RGB C_MAP_ROAD    = { 28,  45,  58 };   // secondary, tertiary
-static const RGB C_MAP_MAJOR   = { 44,  70,  88 };   // highways, runways
+// Map geometry. Water is the only saturated hue on the basemap — roads read as
+// a neutral luminance ladder instead, warm-grey at the top and cooling as they
+// recede, so a river looks like a river and a highway looks like a road.
+// Weight is carried by the per-class alpha in ambient.cpp, not by these values.
+static const RGB C_MAP_WATER   = { 36, 104, 152 };   // Bow River, creeks, lakes
+static const RGB C_MAP_MINOR   = { 96, 104, 112 };   // residential, range roads
+static const RGB C_MAP_ROAD    = {124, 126, 126 };   // secondary, tertiary
+static const RGB C_MAP_MAJOR   = {162, 158, 150 };   // highways, runways
 
 // Scope furniture
 static const RGB C_RING        = { 38,  66,  86 };

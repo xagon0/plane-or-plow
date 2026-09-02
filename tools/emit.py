@@ -1,9 +1,8 @@
 import json
 ways = json.load(open('map.json'))
-MINOR, ROAD, MAJOR, WATER = 0, 1, 2, 3
-# Painter's order: water underneath, highways on top.
-order = {WATER: 0, MINOR: 1, ROAD: 2, MAJOR: 3}
-ways.sort(key=lambda w: order[w['c']])
+# gen.py already emits the MAP_* enum values, and ascending order is the
+# painter's order: water underneath, highways on top.
+ways.sort(key=lambda w: w['c'])
 
 pts, rows = [], []
 for w in ways:

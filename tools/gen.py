@@ -5,15 +5,17 @@ CLIP_KM = 16.5
 LON_SCALE = math.cos(math.radians(HOME_LAT))
 KM_PER_DEG = 111.32
 
-# render classes
-MINOR, ROAD, MAJOR, WATER = 0, 1, 2, 3
+# Render classes. These values ARE the MAP_* enum emitted into
+# roads_data.h, and ascending order is also the painter's order.
+WATER, MINOR, ROAD, MAJOR = 0, 1, 2, 3
 CLS = {
     'motorway': MAJOR, 'trunk': MAJOR, 'primary': MAJOR,
     'secondary': ROAD, 'tertiary': ROAD,
     'unclassified': MINOR, 'residential': MINOR,
 }
-TOL_M = {MAJOR: 18.0, ROAD: 22.0, MINOR: 30.0, WATER: 30.0}
-MIN_LEN_M = {MAJOR: 40.0, ROAD: 50.0, MINOR: 70.0, WATER: 120.0}
+TOL_M = {MAJOR: 18.0, ROAD: 22.0, MINOR: 40.0, WATER: 30.0}
+# Residential stubs (cul-de-sacs, driveways) are pure clutter at 69 m/px.
+MIN_LEN_M = {MAJOR: 40.0, ROAD: 50.0, MINOR: 130.0, WATER: 120.0}
 
 def xy(lat, lon):
     return ((lon - HOME_LON) * KM_PER_DEG * LON_SCALE * 1000.0,
@@ -104,7 +106,7 @@ for e in d['elements']:
         if length_m(simp) < MIN_LEN_M[cls]: continue
         ways_out.append((cls, simp))
 
-ways_out.sort(key=lambda w: w[0])   # draw water, then minor, road, major
+ways_out.sort(key=lambda w: w[0])   # water, minor, road, major
 total = sum(len(w[1]) for w in ways_out)
 import collections
 c = collections.Counter(w[0] for w in ways_out)
