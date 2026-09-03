@@ -17,9 +17,10 @@
 #define PLOW_API_URL      "https://511.alberta.ca/map/mapIcons/ServiceVehicles"
 
 // --- Aircraft filtering ---
-// ADS-B carries more than aircraft. Emitter categories C0-C7 are surface
-// vehicles and obstacles — airport service trucks, emergency vehicles, tethered
-// balloons — which sit at the field and never fly over anything.
+// ADS-B carries more than aircraft. In emitter category set C, C1 and C2 are
+// surface vehicles (emergency and service) and C3-C5 are obstacles. C0 is NOT
+// one of them — it means "no emitter category information", which real
+// aircraft do report, so filtering it drops planes. Only C1-C7 are dropped.
 #define FILTER_SURFACE_VEHICLES 1
 // Aircraft parked or taxiing report alt_baro as the string "ground". They are
 // static dots at an airport several km away, not something you can hear.

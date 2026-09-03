@@ -182,13 +182,20 @@ looks like a river and a highway looks like a road. Aircraft sit at hue 165,
 clear of the amber plows at 35, the water at 205, and the precipitation ramp's
 pink top end near 325.
 
-**Ground traffic is filtered out.** ADS-B carries more than aircraft: emitter
-categories `C0`-`C7` are surface vehicles and obstacles — airport service
-trucks, emergency vehicles, tethered balloons — and aircraft parked or taxiing
-report `alt_baro` as the string `"ground"`. Neither is going to fly over your
-house, and near an airfield they dominate the scope. Both filters are on by
-default; flip `FILTER_SURFACE_VEHICLES` / `FILTER_ON_GROUND` in
-[`src/config.h`](src/config.h) if you want them back.
+**Ground traffic is filtered out.** ADS-B carries more than aircraft. In
+emitter category set C, `C1` and `C2` are surface vehicles (emergency and
+service) and `C3`-`C5` are obstacles; aircraft parked or taxiing report
+`alt_baro` as the string `"ground"`. Neither flies over your house, and near an
+airfield they dominate the scope.
+
+`C0` is deliberately **not** filtered: it means "no emitter category
+information", which real aircraft do report. Sweeping it up with the rest of
+set C empties the scope of actual planes.
+
+Both filters are on by default; flip `FILTER_SURFACE_VEHICLES` /
+`FILTER_ON_GROUND` in [`src/config.h`](src/config.h) to see them again. For the
+first five minutes after boot the serial log names every dropped contact and
+why, so an empty scope can be explained rather than guessed at.
 
 **Radar fetches are bounded twice.** They run on the LVGL timer, so every
 millisecond spent in one is a millisecond the display is frozen: a 2.5 s stall

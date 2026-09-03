@@ -158,7 +158,13 @@ static void copy_trimmed(char *dst, size_t n, const char *src) {
 // ---------------------------------------------------------------------------
 // Airplane polling
 // ---------------------------------------------------------------------------
+// Log every dropped contact for the first few minutes after boot, so a scope
+// that looks empty can be explained rather than guessed at.
+static bool wx_verbose = true;
+
 static bool poll_airplanes() {
+    if (wx_verbose && millis() > 300000UL) wx_verbose = false;
+
     WiFiClientSecure client;
     client.setInsecure();
 
@@ -201,25 +207,36 @@ static bool poll_airplanes() {
 
     IncomingVehicle incoming[MAX_VEHICLES];
     int n_incoming = 0;
-    int n_filtered = 0;
+    int n_surface = 0, n_ground = 0;
 
     for (JsonObject a : ac) {
         if (n_incoming >= MAX_VEHICLES) break;
         if (!a["lat"].is<float>() || !a["lon"].is<float>()) continue;
         if (!a["hex"].is<const char *>()) continue;
 
+        const char *cat = a["category"].is<const char *>()
+                        ? a["category"].as<const char *>() : NULL;
+        bool on_ground = a["alt_baro"].is<const char *>() &&
+                         strcmp(a["alt_baro"].as<const char *>(), "ground") == 0;
+
 #if FILTER_SURFACE_VEHICLES
-        // Emitter category C0-C7: surface vehicles and point obstacles.
-        if (a["category"].is<const char *>()) {
-            const char *cat = a["category"].as<const char *>();
-            if (cat[0] == 'C' || cat[0] == 'c') { n_filtered++; continue; }
+        // C1/C2 are surface vehicles, C3-C5 obstacles. C0 is "no category
+        // information" and real aircraft do report it, so it must NOT be swept
+        // up here — doing so empties the scope.
+        if (cat && (cat[0] == 'C' || cat[0] == 'c') &&
+            cat[1] >= '1' && cat[1] <= '7') {
+            n_surface++;
+            if (wx_verbose) Serial.printf("  drop %s cat=%s (surface)\r\n",
+                                          a["hex"].as<const char *>(), cat);
+            continue;
         }
 #endif
 #if FILTER_ON_GROUND
-        // alt_baro is the string "ground" rather than a number when down.
-        if (a["alt_baro"].is<const char *>() &&
-            strcmp(a["alt_baro"].as<const char *>(), "ground") == 0) {
-            n_filtered++;
+        if (on_ground) {
+            n_ground++;
+            if (wx_verbose) Serial.printf("  drop %s cat=%s (on ground)\r\n",
+                                          a["hex"].as<const char *>(),
+                                          cat ? cat : "-");
             continue;
         }
 #endif
@@ -255,10 +272,11 @@ static bool poll_airplanes() {
                             incoming, n_incoming, false);
 
     stats.air_ok++;
-    stats.air_filtered = n_filtered;
-    Serial.printf("Airplanes: %d in API, %d ground/surface filtered, "
+    stats.air_filtered = n_surface + n_ground;
+    Serial.printf("Airplanes: %d in API, %d surface, %d on-ground, "
                   "%d in range, %d tracked\r\n",
-                  (int)ac.size(), n_filtered, n_incoming, proximity.aircraft_count);
+                  (int)ac.size(), n_surface, n_ground,
+                  n_incoming, proximity.aircraft_count);
     return proximity.aircraft_count > 0;
 }
 
