@@ -12,9 +12,22 @@
 
 // --- API endpoints ---
 // The aircraft query is built at runtime from HOME_LAT/HOME_LON so that moving
-// the scope actually moves the query. Radius is appended in nautical miles.
-#define AIRPLANE_API_HOST "https://api.airplanes.live/v2/point"
+// the scope actually moves the query. Radius is appended in nautical miles, so
+// the shape is  <host>/<lat>/<lon>/<nm>.
+//
+// adsb.lol serves this shape and asks only that you identify yourself.
+// airplanes.live serves the same shape but has disabled public API access: it
+// returns 403 to everything except a small set of allowlisted User-Agent
+// strings, which is not a foundation to build on. adsb.fi is another option but
+// uses a different path form (/api/v2/lat/<lat>/lon/<lon>/dist/<nm>), so it
+// needs the URL builder in network.cpp adjusting rather than just this line.
+#define AIRPLANE_API_HOST "https://api.adsb.lol/v2/point"
 #define PLOW_API_URL      "https://511.alberta.ca/map/mapIcons/ServiceVehicles"
+
+// --- HTTP identity ---
+// Say who we are. If you fork this, put your own URL here.
+#define HTTP_USER_AGENT \
+    "plane-or-plow/1.0 (+https://github.com/xagon0/plane-or-plow)"
 
 // --- Aircraft filtering ---
 // ADS-B carries more than aircraft. In emitter category set C, C1 and C2 are

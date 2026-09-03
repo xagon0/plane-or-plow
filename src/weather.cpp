@@ -88,6 +88,7 @@ static bool fetch_tile(uint8_t *dst, int n, float box_km, const char *iso_time) 
     client.setInsecure();
     HTTPClient http;
     http.begin(client, url);
+    http.setUserAgent(HTTP_USER_AGENT);
     http.setTimeout(9000);
     // HTTP/1.0 turns off chunked transfer encoding. We read the body through
     // getStreamPtr() to feed the PNG decoder incrementally, and that stream is

@@ -19,7 +19,7 @@ anything is coming.
 
 ## What it shows
 
-- **Aircraft** from [airplanes.live](https://airplanes.live), as triangles
+- **Aircraft** from [adsb.lol](https://adsb.lol), as triangles
   pointing along their track, dead-reckoned between fixes so they glide rather
   than jump. Callsign, distance and altitude for the nearest one. Ground
   traffic is filtered out — see below.
@@ -220,7 +220,7 @@ python3 tools/wx_ramp.py
 
 - Map data © OpenStreetMap contributors, [ODbL](https://www.openstreetmap.org/copyright)
 - Radar © Environment and Climate Change Canada, [GeoMet open data](https://eccc-msc.github.io/open-data/)
-- Aircraft via [airplanes.live](https://airplanes.live)
+- Aircraft via [adsb.lol](https://adsb.lol)
 - Plows via [Alberta 511](https://511.alberta.ca)
 - Built on [LVGL](https://lvgl.io), [Arduino_GFX](https://github.com/moononournation/Arduino_GFX),
   [pngle](https://github.com/kikuchan/pngle) and [ArduinoJson](https://arduinojson.org)
@@ -229,10 +229,27 @@ Be a good neighbour to the free APIs: the defaults poll one source every 20 s
 and radar every 6 minutes, which is well within what they ask for. If you
 shorten those intervals, you're the reason they get rate limited.
 
-airplanes.live gates access by client, and will return HTTP 403 with a message
-asking you to email them about your project. If you see that, do exactly
-that — they are reasonable, and the alternative is everyone hammering an
-endpoint that costs someone money to run.
+### A note on the ADS-B provider
+
+This used to default to airplanes.live. It doesn't any more.
+
+airplanes.live has disabled public API access — the endpoint returns HTTP 403
+to everything except a short allowlist of `User-Agent` strings, one of which
+happens to be the Arduino `HTTPClient` default. Building on that is building on
+an accident, and there are
+[well-documented reports](https://www.reddit.com/r/ADSB/comments/1vxwd46/)
+of good-faith enquiries — including paying commercial ones — being met badly.
+So this does not use their service and does not suggest you contact them.
+
+[adsb.lol](https://adsb.lol) serves the identical `/v2/point/<lat>/<lon>/<nm>`
+shape, asks only that you identify yourself with a real `User-Agent`, and is a
+drop-in swap. [adsb.fi](https://adsb.fi) is another option; it works the same
+way but uses `/api/v2/lat/<lat>/lon/<lon>/dist/<nm>`, so it needs the URL
+builder in `network.cpp` adjusted rather than just the constant in
+`config.h`.
+
+All of these run on data volunteered by people with receivers on their roofs.
+If you get value out of this, consider [feeding](https://adsb.lol/feed/) one.
 
 ## License
 

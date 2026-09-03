@@ -176,6 +176,7 @@ static bool poll_airplanes() {
 
     HTTPClient http;
     http.begin(client, url);
+    http.setUserAgent(HTTP_USER_AGENT);
     http.setTimeout(5000);
     http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
 
@@ -294,7 +295,7 @@ static bool poll_snowplows() {
     http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
     http.addHeader("X-Requested-With", "XMLHttpRequest");
     http.addHeader("Accept", "application/json");
-    http.addHeader("User-Agent", "ESP32");
+    http.setUserAgent(HTTP_USER_AGENT);
 
     int code = http.GET();
     if (code == 429) {
