@@ -21,7 +21,8 @@ anything is coming.
 
 - **Aircraft** from [airplanes.live](https://airplanes.live), as triangles
   pointing along their track, dead-reckoned between fixes so they glide rather
-  than jump. Callsign, distance and altitude for the nearest one.
+  than jump. Callsign, distance and altitude for the nearest one. Ground
+  traffic is filtered out — see below.
 - **Snowplows** from [Alberta 511](https://511.alberta.ca), trailing the
   highway they're working.
 - **Precipitation** from [Environment Canada GeoMet](https://eccc-msc.github.io/open-data/msc-geomet/readme_en/),
@@ -54,6 +55,11 @@ Pin assignments live at the top of [`src/main.cpp`](src/main.cpp). They match
 the common ESP32-4848S040 wiring; if your board differs, that's the file.
 
 ## Setup
+
+The `espressif32` platform is pinned to 6.12.0 in
+[`platformio.ini`](platformio.ini). Unpinned it resolves to 53.x / Arduino core
+3.x, where the LEDC and Arduino_GFX APIs this uses have been renamed and the
+build fails outright.
 
 **1. Install [PlatformIO](https://platformio.org/install/cli)**
 
@@ -176,6 +182,14 @@ looks like a river and a highway looks like a road. Aircraft sit at hue 165,
 clear of the amber plows at 35, the water at 205, and the precipitation ramp's
 pink top end near 325.
 
+**Ground traffic is filtered out.** ADS-B carries more than aircraft: emitter
+categories `C0`-`C7` are surface vehicles and obstacles — airport service
+trucks, emergency vehicles, tethered balloons — and aircraft parked or taxiing
+report `alt_baro` as the string `"ground"`. Neither is going to fly over your
+house, and near an airfield they dominate the scope. Both filters are on by
+default; flip `FILTER_SURFACE_VEHICLES` / `FILTER_ON_GROUND` in
+[`src/config.h`](src/config.h) if you want them back.
+
 **Radar fetches are bounded twice.** They run on the LVGL timer, so every
 millisecond spent in one is a millisecond the display is frozen: a 2.5 s stall
 timeout and a 9 s ceiling on the whole read.
@@ -207,6 +221,11 @@ python3 tools/wx_ramp.py
 Be a good neighbour to the free APIs: the defaults poll one source every 20 s
 and radar every 6 minutes, which is well within what they ask for. If you
 shorten those intervals, you're the reason they get rate limited.
+
+airplanes.live gates access by client, and will return HTTP 403 with a message
+asking you to email them about your project. If you see that, do exactly
+that — they are reasonable, and the alternative is everyone hammering an
+endpoint that costs someone money to run.
 
 ## License
 

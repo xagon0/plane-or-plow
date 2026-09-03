@@ -16,6 +16,7 @@ struct SysStats {
     uint32_t radar_last_ms   = 0;
     uint32_t radar_last_bytes = 0;
     uint32_t air_ok    = 0, air_fail  = 0;
+    uint32_t air_filtered = 0;   // ground/surface contacts dropped last poll
     uint32_t plow_ok   = 0, plow_fail = 0;
     uint32_t wifi_reconnects = 0;
     uint32_t heap_at_boot    = 0;   // very early in setup()

@@ -201,11 +201,28 @@ static bool poll_airplanes() {
 
     IncomingVehicle incoming[MAX_VEHICLES];
     int n_incoming = 0;
+    int n_filtered = 0;
 
     for (JsonObject a : ac) {
         if (n_incoming >= MAX_VEHICLES) break;
         if (!a["lat"].is<float>() || !a["lon"].is<float>()) continue;
         if (!a["hex"].is<const char *>()) continue;
+
+#if FILTER_SURFACE_VEHICLES
+        // Emitter category C0-C7: surface vehicles and point obstacles.
+        if (a["category"].is<const char *>()) {
+            const char *cat = a["category"].as<const char *>();
+            if (cat[0] == 'C' || cat[0] == 'c') { n_filtered++; continue; }
+        }
+#endif
+#if FILTER_ON_GROUND
+        // alt_baro is the string "ground" rather than a number when down.
+        if (a["alt_baro"].is<const char *>() &&
+            strcmp(a["alt_baro"].as<const char *>(), "ground") == 0) {
+            n_filtered++;
+            continue;
+        }
+#endif
 
         float lat = a["lat"];
         float lon = a["lon"];
@@ -238,8 +255,10 @@ static bool poll_airplanes() {
                             incoming, n_incoming, false);
 
     stats.air_ok++;
-    Serial.printf("Airplanes: %d in API, %d in range, %d tracked\r\n",
-                  (int)ac.size(), n_incoming, proximity.aircraft_count);
+    stats.air_filtered = n_filtered;
+    Serial.printf("Airplanes: %d in API, %d ground/surface filtered, "
+                  "%d in range, %d tracked\r\n",
+                  (int)ac.size(), n_filtered, n_incoming, proximity.aircraft_count);
     return proximity.aircraft_count > 0;
 }
 

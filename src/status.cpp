@@ -106,6 +106,7 @@ static void handle_status() {
       "  },\n"
       "  \"polls\": {\n"
       "    \"aircraft_ok\": %lu, \"aircraft_fail\": %lu,\n"
+      "    \"aircraft_filtered_last\": %lu,\n"
       "    \"plow_ok\": %lu, \"plow_fail\": %lu\n"
       "  },\n"
       "  \"backlight\": { \"duty\": %u, \"daytime\": %s }\n"
@@ -130,6 +131,7 @@ static void handle_status() {
       weather_inbound ? weather_inbound_km : 0.0f,
       weather_inbound ? weather_inbound_bearing : 0.0f,
       (unsigned long)stats.air_ok, (unsigned long)stats.air_fail,
+      (unsigned long)stats.air_filtered,
       (unsigned long)stats.plow_ok, (unsigned long)stats.plow_fail,
       (unsigned)backlight_duty(), backlight_is_daytime() ? "true" : "false");
 

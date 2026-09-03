@@ -16,6 +16,15 @@
 #define AIRPLANE_API_HOST "https://api.airplanes.live/v2/point"
 #define PLOW_API_URL      "https://511.alberta.ca/map/mapIcons/ServiceVehicles"
 
+// --- Aircraft filtering ---
+// ADS-B carries more than aircraft. Emitter categories C0-C7 are surface
+// vehicles and obstacles — airport service trucks, emergency vehicles, tethered
+// balloons — which sit at the field and never fly over anything.
+#define FILTER_SURFACE_VEHICLES 1
+// Aircraft parked or taxiing report alt_baro as the string "ground". They are
+// static dots at an airport several km away, not something you can hear.
+#define FILTER_ON_GROUND        1
+
 // --- Timing ---
 // Aircraft take 3 of every 4 ticks, plows the 4th: aircraft refresh ~27s,
 // plows ~80s. Shorter aircraft gaps mean the renderer extrapolates less
