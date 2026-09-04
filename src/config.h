@@ -104,6 +104,16 @@
 #define WX_WIDE_MIN_KM    18.0f     // ignore echoes already inside the scope
 #define WX_WIDE_THRESH    46        // 0..255 intensity worth reporting
 
+// --- Manual brightness strip ---
+// Drag or tap the left edge to set brightness directly, full at the top down
+// to off at the bottom. This overrides the schedule until the next scheduled
+// transition, which then takes it back — so a manual dim never becomes a
+// permanently dark panel you have to remember to undo.
+#define BRIGHT_ZONE_W   96      // left fifth of a 480 px panel
+#define BRIGHT_TOP_Y    34      // y that means 100%
+#define BRIGHT_BOT_Y    446     // y that means off
+#define BRIGHT_HOLD_MS  1400    // indicator lingers this long after release
+
 // --- Night peek ---
 #define NIGHT_PEEK_MS    15000
 

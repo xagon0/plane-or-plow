@@ -119,7 +119,8 @@ static void handle_status() {
       "    \"aircraft_filtered_last\": %lu,\n"
       "    \"plow_ok\": %lu, \"plow_fail\": %lu\n"
       "  },\n"
-      "  \"backlight\": { \"duty\": %u, \"daytime\": %s,\n"
+      "  \"backlight\": { \"duty\": %u, \"percent\": %u, \"manual\": %s,\n"
+      "                  \"daytime\": %s,\n"
       "                  \"transitions\": %lu, \"last_transition\": \"%s\" }\n"
       "}\n",
       (unsigned long)up, (unsigned long)(up / 3600), (unsigned long)((up % 3600) / 60),
@@ -147,7 +148,9 @@ static void handle_status() {
       (unsigned long)stats.air_ok, (unsigned long)stats.air_fail,
       (unsigned long)stats.air_filtered,
       (unsigned long)stats.plow_ok, (unsigned long)stats.plow_fail,
-      (unsigned)backlight_duty(), backlight_is_daytime() ? "true" : "false",
+      (unsigned)backlight_duty(), (unsigned)((backlight_duty() * 100) / 255),
+      backlight_manual() ? "true" : "false",
+      backlight_is_daytime() ? "true" : "false",
       (unsigned long)stats.bl_transitions, stats.bl_last);
 
     if (n < 0 || n >= (int)sizeof(b)) {

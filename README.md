@@ -34,8 +34,12 @@ anything is coming.
   highways, composited once at boot.
 
 Two sonar rings expand from home on an 8.5 s cycle; contacts ping as a pulse
-crosses their range. Brightness is scheduled, not controlled — on at 07:30,
-off at 23:00, easing over 1.6 s rather than stepping. The wall clock sits in
+crosses their range. Brightness is scheduled — on at 07:30, off at 23:00,
+easing over 1.6 s rather than stepping — and can be overridden by dragging the
+left edge of the panel: full at the top, off at the bottom, with a level
+indicator that fades after a moment. The override holds until the next
+scheduled transition takes it back, so a manual dim never becomes a
+permanently dark panel you have to remember to undo. The wall clock sits in
 the bottom-left corner; `--:--` there means NTP has not synced, and since the
 schedule depends entirely on the clock, that is the first thing to check if the
 panel never dims.
