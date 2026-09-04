@@ -35,7 +35,10 @@ anything is coming.
 
 Two sonar rings expand from home on an 8.5 s cycle; contacts ping as a pulse
 crosses their range. Brightness is scheduled, not controlled — on at 07:30,
-off at 23:00, easing over 1.6 s rather than stepping.
+off at 23:00, easing over 1.6 s rather than stepping. The wall clock sits in
+the bottom-left corner; `--:--` there means NTP has not synced, and since the
+schedule depends entirely on the clock, that is the first thing to check if the
+panel never dims.
 
 ## Hardware
 
@@ -133,6 +136,11 @@ To find a leak, watch `heap.drift_since_settled` and `heap.min_free` over
 hours. The baseline is captured *after* startup allocation finishes — measuring
 from boot would read normal initialisation as a 50 KB leak.
 
+`backlight.last_transition` records when the schedule last fired and at what
+wall-clock time, so "did it dim last night?" is answerable the next morning
+without a serial cable. `clock.valid` says whether the device has ever had a
+real time at all.
+
 `reset_reason` survives a reboot in RTC memory, so an unattended crash is still
 diagnosable hours later. `PANIC / exception`, `task watchdog` and
 `BROWNOUT (power)` each point somewhere different.
@@ -196,6 +204,12 @@ Both filters are on by default; flip `FILTER_SURFACE_VEHICLES` /
 `FILTER_ON_GROUND` in [`src/config.h`](src/config.h) to see them again. For the
 first five minutes after boot the serial log names every dropped contact and
 why, so an empty scope can be explained rather than guessed at.
+
+**SNTP starts only after WiFi is up.** Starting it during `setup()` — before
+the radio associates — means the first resolution fails, and lwIP's retry
+backoff can leave the clock unset for a long time. An unset clock means
+`is_daytime()` has nothing to go on, holds its seeded "daytime", and the panel
+never dims, silently. It is re-kicked every two minutes until it lands.
 
 **Radar fetches are bounded twice.** They run on the LVGL timer, so every
 millisecond spent in one is a millisecond the display is frozen: a 2.5 s stall

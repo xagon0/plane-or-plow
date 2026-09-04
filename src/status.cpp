@@ -3,6 +3,7 @@
 #include "ambient.h"
 #include "weather.h"
 #include "backlight.h"
+#include "timekeep.h"
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WebServer.h>
@@ -76,6 +77,13 @@ static void handle_status() {
     nearest_contact(near_km, &near_kind, &near_label);
 
     uint32_t up = millis() / 1000UL;
+    char clock_str[24] = "unset";
+    {
+        struct tm t;
+        if (time_local(&t)) {
+            strftime(clock_str, sizeof(clock_str), "%Y-%m-%d %H:%M:%S", &t);
+        }
+    }
     uint32_t free_heap = ESP.getFreeHeap();
 
     static char b[1800];
@@ -85,6 +93,8 @@ static void handle_status() {
       "  \"uptime_s\": %lu,\n"
       "  \"uptime\": \"%luh %lum\",\n"
       "  \"reset_reason\": \"%s\",\n"
+      "  \"clock\": { \"valid\": %s, \"local\": \"%s\", \"tz\": \"%s\",\n"
+      "              \"synced_s_ago\": %lu, \"schedule\": \"%02d:%02d-%02d:%02d\" },\n"
       "  \"heap\": {\n"
       "    \"free\": %u,\n"
       "    \"min_free\": %u,\n"
@@ -109,10 +119,14 @@ static void handle_status() {
       "    \"aircraft_filtered_last\": %lu,\n"
       "    \"plow_ok\": %lu, \"plow_fail\": %lu\n"
       "  },\n"
-      "  \"backlight\": { \"duty\": %u, \"daytime\": %s }\n"
+      "  \"backlight\": { \"duty\": %u, \"daytime\": %s,\n"
+      "                  \"transitions\": %lu, \"last_transition\": \"%s\" }\n"
       "}\n",
       (unsigned long)up, (unsigned long)(up / 3600), (unsigned long)((up % 3600) / 60),
       stats.reset_reason,
+      time_valid() ? "true" : "false", clock_str, HOME_TZ,
+      (unsigned long)time_since_sync_s(),
+      SCHEDULE_ON_HOUR, SCHEDULE_ON_MIN, SCHEDULE_OFF_HOUR, SCHEDULE_OFF_MIN,
       (unsigned)free_heap,
       (unsigned)ESP.getMinFreeHeap(),
       (unsigned)stats.heap_at_boot,
@@ -133,7 +147,8 @@ static void handle_status() {
       (unsigned long)stats.air_ok, (unsigned long)stats.air_fail,
       (unsigned long)stats.air_filtered,
       (unsigned long)stats.plow_ok, (unsigned long)stats.plow_fail,
-      (unsigned)backlight_duty(), backlight_is_daytime() ? "true" : "false");
+      (unsigned)backlight_duty(), backlight_is_daytime() ? "true" : "false",
+      (unsigned long)stats.bl_transitions, stats.bl_last);
 
     if (n < 0 || n >= (int)sizeof(b)) {
         server.send(500, "text/plain", "status buffer overflow");

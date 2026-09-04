@@ -10,6 +10,7 @@
 #include "ambient.h"
 #include "backlight.h"
 #include "status.h"
+#include "timekeep.h"
 
 // Every API fetch runs an mbedTLS handshake on the Arduino loop task, whose
 // stack defaults to 8 KB. Measured peak was ~6.3 KB of that, and a reconnect
@@ -161,6 +162,7 @@ void setup() {
     }
 
     network_init();
+    time_init();          // after WiFi: SNTP started earlier just fails
     status_init();
 
     status_mark_settled();
@@ -170,6 +172,7 @@ void setup() {
 void loop() {
     lv_timer_handler();
     backlight_update();
+    time_tick();
     status_update();
     delay(5);
 }

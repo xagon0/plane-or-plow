@@ -2,6 +2,7 @@
 #include "ambient.h"
 #include "config.h"
 #include "theme.h"
+#include "timekeep.h"
 #include <Arduino.h>
 #include <WiFi.h>
 #include <lvgl.h>
@@ -18,7 +19,7 @@ static lv_obj_t *lbl_air_n    = NULL;
 static lv_obj_t *lbl_air_cap  = NULL;
 static lv_obj_t *lbl_plow_n   = NULL;
 static lv_obj_t *lbl_plow_cap = NULL;
-static lv_obj_t *lbl_status   = NULL;
+static lv_obj_t *lbl_clock    = NULL;
 static lv_obj_t *lbl_range    = NULL;
 static lv_obj_t *lbl_nearest  = NULL;
 
@@ -110,10 +111,21 @@ static void hud_tick_cb(lv_timer_t *timer) {
     lv_obj_set_style_text_color(lbl_plow_cap,
         col(proximity.plow_count ? C_TEXT_DIM : C_TEXT_FAINT), 0);
 
+    // "--:--" means the clock has never synced, which is the one failure that
+    // would otherwise be invisible: the schedule silently assumes daytime and
+    // the panel just never dims.
     bool online = (WiFi.status() == WL_CONNECTED);
-    lv_label_set_text(lbl_status, online ? "ONLINE" : "OFFLINE");
-    lv_obj_set_style_text_color(lbl_status,
-        col(online ? C_TEXT_FAINT : C_TEXT_ALERT), 0);
+    struct tm t;
+    if (time_local(&t)) {
+        char clk[8];
+        snprintf(clk, sizeof(clk), "%02d:%02d", t.tm_hour, t.tm_min);
+        lv_label_set_text(lbl_clock, clk);
+        lv_obj_set_style_text_color(lbl_clock,
+            col(online ? C_TEXT_DIM : C_TEXT_PLOW), 0);
+    } else {
+        lv_label_set_text(lbl_clock, "--:--");
+        lv_obj_set_style_text_color(lbl_clock, col(C_TEXT_ALERT), 0);
+    }
 
     update_nearest();
 }
@@ -141,9 +153,12 @@ void hud_init() {
                               LV_ALIGN_TOP_RIGHT, -16, 40);
 
     // Lower corners — link state and scope range.
-    lbl_status = make_label(&lv_font_montserrat_14, C_TEXT_FAINT, 3,
-                            LV_ALIGN_BOTTOM_LEFT, 16, -30);
-    lv_label_set_text(lbl_status, "ONLINE");
+    // The clock replaces the old ONLINE label. Link state was already carried
+    // by the home marker turning red, so that word was redundant — and a
+    // schedule that depends on the clock ought to show the clock.
+    lbl_clock = make_label(&lv_font_montserrat_20, C_TEXT_DIM, 1,
+                           LV_ALIGN_BOTTOM_LEFT, 16, -26);
+    lv_label_set_text(lbl_clock, "--:--");
 
     lbl_range = make_label(&lv_font_montserrat_14, C_TEXT_FAINT, 3,
                            LV_ALIGN_BOTTOM_RIGHT, -16, -30);

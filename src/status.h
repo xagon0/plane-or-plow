@@ -19,6 +19,11 @@ struct SysStats {
     uint32_t air_filtered = 0;   // ground/surface contacts dropped last poll
     uint32_t plow_ok   = 0, plow_fail = 0;
     uint32_t wifi_reconnects = 0;
+    // Backlight schedule history, so "did it dim last night?" is answerable
+    // the next morning from /status alone, without a serial cable.
+    uint32_t bl_transitions  = 0;
+    char     bl_last[56]     = "none since boot";
+
     uint32_t heap_at_boot    = 0;   // very early in setup()
     uint32_t heap_settled    = 0;   // once everything is initialised
     const char *reset_reason = "?";

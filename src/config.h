@@ -52,6 +52,14 @@
 #define SCREEN_W 480
 #define SCREEN_H 480
 
+// --- Time ---
+// SNTP is started only after WiFi is up; starting it before means the first
+// resolution fails and lwIP's retry does not come round again for an hour.
+#define NTP_SERVER_1  "pool.ntp.org"
+#define NTP_SERVER_2  "time.google.com"
+#define NTP_SERVER_3  "time.nist.gov"
+#define NTP_RETRY_MS  120000UL     // re-kick a clock that has never synced
+
 // --- Backlight schedule (MST, 24h) ---
 #define SCHEDULE_ON_HOUR  7
 #define SCHEDULE_ON_MIN   30

@@ -3,6 +3,8 @@
 #include "config.h"
 #include "network.h"
 #include "weather.h"
+#include "timekeep.h"
+#include "status.h"
 #include <Arduino.h>
 #include <lvgl.h>
 #include <time.h>
@@ -22,15 +24,13 @@ static bool last_daytime = true;         // sticky across NTP hiccups
 static bool peek_active = false;
 static unsigned long peek_deadline = 0;
 
-static void ntp_init() {
-    configTzTime(HOME_TZ, "pool.ntp.org");
-    Serial.printf("NTP: configTzTime %s\r\n", HOME_TZ);
-}
-
 static bool is_daytime() {
     struct tm t;
-    if (!getLocalTime(&t, 0)) {
-        return last_daytime;  // NTP glitch — hold the last known state
+    if (!time_local(&t)) {
+        // The clock has never been set. Staying lit is the safe default, but it
+        // is also exactly the failure that looks like "the schedule is broken",
+        // so the panel shows --:-- and /status says so rather than hiding it.
+        return last_daytime;
     }
     int mins = t.tm_hour * 60 + t.tm_min;
     int on_mins  = SCHEDULE_ON_HOUR * 60 + SCHEDULE_ON_MIN;
@@ -92,8 +92,6 @@ void backlight_init() {
     ledcSetup(BL_PWM_CHANNEL, BL_PWM_FREQ, BL_PWM_RESOLUTION);
     ledcAttachPin(BL_PIN, BL_PWM_CHANNEL);
 
-    ntp_init();
-
     // Fade up from black on boot rather than snapping on.
     current_duty = 0.0f;
     target_duty  = BL_DAY_DUTY;
@@ -133,14 +131,20 @@ bool    backlight_is_daytime() { return last_daytime; }
 void backlight_update() {
     bool day = is_daytime();
 
-    if (day && !was_daytime) {
-        target_duty = BL_DAY_DUTY;
+    if (day != was_daytime) {
+        struct tm t;
+        bool have = time_local(&t);
+        target_duty = day ? BL_DAY_DUTY : BL_NIGHT_DUTY;
         peek_active = false;
-        Serial.println("Backlight: night -> day");
-    } else if (!day && was_daytime) {
-        target_duty = BL_NIGHT_DUTY;
-        peek_active = false;
-        Serial.println("Backlight: day -> night");
+        uint32_t up = millis() / 1000UL;
+        snprintf(stats.bl_last, sizeof(stats.bl_last),
+                 "%s at %02d:%02d%s (uptime %luh %lum)",
+                 day ? "night->day" : "day->night",
+                 have ? t.tm_hour : 0, have ? t.tm_min : 0,
+                 have ? "" : " CLOCK-UNSET",
+                 (unsigned long)(up / 3600), (unsigned long)((up % 3600) / 60));
+        stats.bl_transitions++;
+        Serial.printf("Backlight: %s\r\n", stats.bl_last);
     }
     was_daytime = day;
 
