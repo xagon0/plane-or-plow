@@ -95,8 +95,20 @@ That writes two files, both gitignored:
 
 Re-run it whenever you move the scope, change the radius, or want fresher map
 data; anything you don't pass again is preserved. `--skip-map` rewrites only
-the credentials. `--tz` takes a POSIX timezone (`MST7`, `PST8PDT`,
-`GMT0BST,M3.5.0/1,M10.5.0`) for the backlight schedule.
+the credentials. `--tz` takes a POSIX timezone for the backlight schedule.
+
+Get this right or the panel dims an hour off. Include a DST rule **only** if
+your region actually observes DST — a bare offset is an hour slow all summer
+where it does, and a DST rule is an hour slow all winter where it doesn't.
+Alberta, for instance, has been on UTC-6 year round since 2026, so `MDT6` is
+correct and `MST7MDT,...` is not. Verify with:
+
+```bash
+TZ="MDT6" date                 # your candidate
+TZ="America/Edmonton" date     # the authority
+```
+
+They should agree in both July and January.
 
 **3. Build and flash**
 

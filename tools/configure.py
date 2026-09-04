@@ -51,6 +51,11 @@ HIGHWAY_CLASS = {
 TOLERANCE_M = {MAJOR: 18.0, ROAD: 22.0, MINOR: 40.0, WATER: 30.0}
 MIN_LENGTH_M = {MAJOR: 40.0, ROAD: 50.0, MINOR: 130.0, WATER: 120.0}
 
+# Alberta has been on UTC-6 year round since 2026, so a bare offset is correct
+# here and a DST rule would put the clock an hour out every winter. Regions that
+# do still switch need the full rule, e.g. "MST7MDT,M3.2.0,M11.1.0".
+DEFAULT_TZ = "MDT6"
+
 MIN_STREAM_M = 4000.0     # shorter creeks are noise at this scale
 MIN_LAKE_M = 500.0        # ponds below this read as specks
 
@@ -294,7 +299,7 @@ def write_secrets(path, ssid, password, name, lat, lon, radius, tz):
 
     ssid = ssid if ssid is not None else existing("WIFI_SSID", "your-network")
     password = password if password is not None else existing("WIFI_PASS", "your-password")
-    tz = tz if tz is not None else existing("HOME_TZ", "MST7")
+    tz = tz if tz is not None else existing("HOME_TZ", DEFAULT_TZ)
     name = name if name is not None else existing("HOME_NAME", "Somewhere")
 
     with open(path, "w") as f:
@@ -333,7 +338,9 @@ def main():
                     help="scope radius in km (default 15)")
     ap.add_argument("--ssid", help="WiFi SSID")
     ap.add_argument("--password", help="WiFi password")
-    ap.add_argument("--tz", help='POSIX timezone, e.g. "MST7" or "PST8PDT"')
+    ap.add_argument("--tz", help='POSIX timezone. Include the DST rule only if '
+                                 'your region observes DST: "MDT6" (Alberta), '
+                                 '"PST8PDT,M3.2.0,M11.1.0" (US Pacific)')
     ap.add_argument("--skip-map", action="store_true",
                     help="rewrite secrets.h only; leave the basemap alone")
     args = ap.parse_args()
