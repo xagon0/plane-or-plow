@@ -2,6 +2,9 @@
 #include "config.h"
 #include "ambient.h"
 #include "status.h"
+#include "http_body.h"
+#include "diagnostics.h"
+#include "contact_freshness.h"
 #include <Arduino.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
@@ -163,6 +166,7 @@ static void copy_trimmed(char *dst, size_t n, const char *src) {
 static bool wx_verbose = true;
 
 static bool poll_airplanes() {
+    DiagnosticsPhase phase("aircraft_fetch");
     if (wx_verbose && millis() > 300000UL) wx_verbose = false;
 
     WiFiClientSecure client;
@@ -177,12 +181,12 @@ static bool poll_airplanes() {
     HTTPClient http;
     http.begin(client, url);
     http.setUserAgent(HTTP_USER_AGENT);
-    http.setTimeout(5000);
-    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+    configure_http(http, client, false); // adsb.lol requires HTTP/1.1
 
     int code = http.GET();
     if (code == 429) {
         Serial.println("Airplane API HTTP 429 — cancelling boost");
+        stats.air_fail++;
         cancel_boost();
         http.end();
         return false;
@@ -194,15 +198,24 @@ static bool poll_airplanes() {
         return false;
     }
 
-    String payload = http.getString();
+    HttpBodyBuffer payload;
+    bool body_ok = read_http_body(http, payload, 256 * 1024);
     http.end();
+    if (!body_ok) { stats.air_fail++; return false; }
 
+    JsonDocument filter;
+    JsonObject fields = filter["ac"][0].to<JsonObject>();
+    for (const char *key : {"lat", "lon", "hex", "category", "alt_baro",
+                            "flight", "track", "gs"}) fields[key] = true;
     JsonDocument doc;
-    DeserializationError err = deserializeJson(doc, payload);
+    DeserializationError err = deserializeJson(doc, (const char *)payload.data,
+        payload.size, DeserializationOption::Filter(filter));
     if (err) {
         Serial.printf("Airplane JSON error: %s\r\n", err.c_str());
+        stats.air_fail++;
         return false;
     }
+    if (!doc["ac"].is<JsonArray>()) { stats.air_fail++; return false; }
 
     JsonArray ac = doc["ac"];
 
@@ -273,6 +286,7 @@ static bool poll_airplanes() {
                             incoming, n_incoming, false);
 
     stats.air_ok++;
+    stats.air_last_ok_ms = millis();
     stats.air_filtered = n_surface + n_ground;
     Serial.printf("Airplanes: %d in API, %d surface, %d on-ground, "
                   "%d in range, %d tracked\r\n",
@@ -285,14 +299,13 @@ static bool poll_airplanes() {
 // Snowplow polling
 // ---------------------------------------------------------------------------
 static bool poll_snowplows() {
+    DiagnosticsPhase phase("plow_fetch");
     WiFiClientSecure client;
     client.setInsecure(); // Skip cert verification
 
     HTTPClient http;
     http.begin(client, PLOW_API_URL);
-    http.setTimeout(10000);
-    http.useHTTP10(true);  // HTTP/1.0 prevents gzip and chunked encoding
-    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+    configure_http(http, client);
     http.addHeader("X-Requested-With", "XMLHttpRequest");
     http.addHeader("Accept", "application/json");
     http.setUserAgent(HTTP_USER_AGENT);
@@ -300,6 +313,7 @@ static bool poll_snowplows() {
     int code = http.GET();
     if (code == 429) {
         Serial.println("Plow API HTTP 429 — cancelling boost");
+        stats.plow_fail++;
         cancel_boost();
         http.end();
         return false;
@@ -311,15 +325,23 @@ static bool poll_snowplows() {
         return false;
     }
 
-    String payload = http.getString();
+    HttpBodyBuffer payload;
+    bool body_ok = read_http_body(http, payload, 1024 * 1024);
     http.end();
+    if (!body_ok) { stats.plow_fail++; return false; }
 
+    JsonDocument filter;
+    filter["item2"][0]["itemId"] = true;
+    filter["item2"][0]["location"] = true;
     JsonDocument doc;
-    DeserializationError err = deserializeJson(doc, payload);
+    DeserializationError err = deserializeJson(doc, (const char *)payload.data,
+        payload.size, DeserializationOption::Filter(filter));
     if (err) {
         Serial.printf("Plow JSON error: %s\r\n", err.c_str());
+        stats.plow_fail++;
         return false;
     }
+    if (!doc["item2"].is<JsonArray>()) { stats.plow_fail++; return false; }
 
     JsonArray vehicles = doc["item2"];
     int total = vehicles.size();
@@ -358,6 +380,7 @@ static bool poll_snowplows() {
                             incoming, n_incoming, true);
 
     stats.plow_ok++;
+    stats.plow_last_ok_ms = millis();
     Serial.printf("Snowplows: %d total, %d in range, %d tracked\r\n",
                   total, n_incoming, proximity.plow_count);
     return proximity.plow_count > 0;
@@ -396,6 +419,7 @@ static void poll_tick_cb(lv_timer_t *timer) {
     } else {
         proximity.airplane_nearby = poll_airplanes();
     }
+    diagnostics_checkpoint();
 
     poll_cycle++;
 }
@@ -403,6 +427,17 @@ static void poll_tick_cb(lv_timer_t *timer) {
 // ---------------------------------------------------------------------------
 // Public init
 // ---------------------------------------------------------------------------
+void network_tick() {
+    // Failed polls never called update_tracked_vehicles(), so its poll-age
+    // counter could keep old contacts visible for hours. Expire by elapsed
+    // time even when every request fails or the connection stays offline.
+    const uint32_t now = millis();
+    expire_contacts(proximity.aircraft, proximity.aircraft_count, now, 180000UL);
+    expire_contacts(proximity.plows, proximity.plow_count, now, 600000UL);
+    proximity.airplane_nearby = proximity.aircraft_count > 0;
+    proximity.snowplow_nearby = proximity.plow_count > 0;
+}
+
 void network_init() {
     WiFi.mode(WIFI_STA);
     WiFi.setAutoReconnect(true);

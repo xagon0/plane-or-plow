@@ -135,8 +135,10 @@ Radar tile 64x64 (33km): 1131 bytes, 1051 cells, 21 ms, heap 252472, stack left 
 Airplanes: 5 in API, 5 in range, 5 tracked
 ```
 
-The `Invalid pin selected` and `gpio_set_level(227)` complaints during panel
-init are normal for this board and harmless.
+Touch startup should report `GT911 ready` with its detected I²C address.
+The driver uses the controller's existing configuration and does not try to
+reset it through unavailable pins. Check `touch.available` and `touch.errors`
+in `/status` if touch does not respond or I²C errors appear on serial.
 
 ## Checking on it
 
@@ -145,8 +147,24 @@ curl http://planeorplow.local/status
 ```
 
 JSON: uptime, why the last run ended, heap, PSRAM, loop-task stack headroom,
-WiFi state, contact counts, radar fetch and failure counters, backlight state.
-Everything reported is a maintained counter, so polling is free.
+WiFi state, contact counts, radar fetch and failure counters, backlight state,
+touch health, download age, watchdog state and the previous run's last recorded
+phase.
+The endpoint uses maintained counters and a bounded JSON response, but serving
+it still takes loop time and some temporary memory. Poll every 30–60 seconds
+for a soak test. If mDNS does not resolve, use the IP printed on serial at boot.
+
+`polls.aircraft_download_age_s` and `polls.plow_download_age_s` measure time
+since the last successful download and parse; `null` means none has succeeded.
+The corresponding `*_download_stale` flags turn on after 3 minutes for
+aircraft and 10 minutes for plows. Contacts also expire after those intervals
+without a new fix, including when requests keep failing.
+
+These are **download ages, not observation timestamps**. The 511 map feed
+does not include a timestamp for each position, and a newly downloaded
+position can itself be old. `polls.plow_position_timestamp_available` is
+therefore `false`. The separate 511 website tooltip has an `Updated` time;
+the firmware does not fetch one tooltip per vehicle.
 
 To find a leak, watch `heap.drift_since_settled` and `heap.min_free` over
 hours. The baseline is captured *after* startup allocation finishes — measuring
@@ -157,9 +175,26 @@ wall-clock time, so "did it dim last night?" is answerable the next morning
 without a serial cable. `clock.valid` says whether the device has ever had a
 real time at all.
 
-`reset_reason` survives a reboot in RTC memory, so an unattended crash is still
-diagnosable hours later. `PANIC / exception`, `task watchdog` and
-`BROWNOUT (power)` each point somewhere different.
+`reset_reason` identifies the reset that started the current boot.
+`diagnostics.watchdog_active` confirms that the loop task has joined the
+60-second task watchdog. If the loop stops making progress, the watchdog
+panics and restarts the device. `diagnostics.previous_run` then reports the
+last phase and progress times saved in RTC RAM, when available. Epoch values
+are zero until the clock has synced.
+
+RTC breadcrumbs survive watchdog/software resets, **not loss of power**;
+power-on and brownout boots discard them. There is no historical log stored
+in flash. Serial emits a health line once a minute and operation errors as
+they occur, so leave an external serial capture running when investigating
+an intermittent fault. Preserve a status snapshot before unplugging a device
+that still answers HTTP.
+
+`touch.available` shows whether the GT911 is currently responding. The
+`touch.errors`, `touch.invalid_frames` and `touch.recoveries` counters distinguish
+transport/frame failures from later recovery; `touch.frames` counts accepted
+frames, including release frames. Failed reads immediately release the LVGL
+pointer, and retries back off from 250 ms to at most 5 seconds. A missing
+controller can therefore recover without continuous polling or a stuck press.
 
 ## Regional scope
 
@@ -178,8 +213,12 @@ Elsewhere you'd want to swap two things:
 | `src/main.cpp` | Panel, touch and LVGL bring-up; the loop |
 | `src/gfx_draw.cpp` | Anti-aliased RGB565 rasteriser: Wu lines, soft strokes, supersampled polygons, glows, symbol casings |
 | `src/ambient.cpp` | The scene — projection, basemap, sonar pulses, contacts, trails, precipitation compositing |
-| `src/weather.cpp` | GeoMet radar: fetch, streaming PNG decode, history, replay, wide-area sweep |
+| `src/weather.cpp` | GeoMet radar: bounded fetch, complete PNG validation/decode, history, replay, wide-area sweep |
 | `src/network.cpp` | Aircraft and plow polling, contact tracking |
+| `src/http_body.h` | Response-body size limits, idle timeout and total read deadline |
+| `src/diagnostics.cpp` | Loop watchdog, RTC phase breadcrumbs and serial health reports |
+| `src/touch_input.cpp` | Checked GT911 I²C reads, release handling and recovery backoff |
+| `src/touch_frame.h` | Touch status, packet-length and coordinate validation |
 | `src/hud.cpp` | The corner readouts |
 | `src/backlight.cpp` | Scheduled brightness with eased transitions |
 | `src/status.cpp` | The `/status` endpoint |
@@ -227,9 +266,39 @@ backoff can leave the clock unset for a long time. An unset clock means
 `is_daytime()` has nothing to go on, holds its seeded "daytime", and the panel
 never dims, silently. It is re-kicked every two minutes until it lands.
 
-**Radar fetches are bounded twice.** They run on the LVGL timer, so every
-millisecond spent in one is a millisecond the display is frozen: a 2.5 s stall
-timeout and a 9 s ceiling on the whole read.
+**HTTP reads cannot wait forever for an unfinished body.** In the pinned
+Arduino core, `HTTPClient::getString()` can keep waiting when a server leaves
+its connection open without sending the rest of the body. Aircraft and plow
+polls used that path inside LVGL timers, stopping display and clock updates.
+The replacement reader gives up after 2.5 seconds without data or 15 seconds
+of body reading (9 seconds for radar), and rejects truncated responses. TLS
+handshakes have an 8-second timeout; connection/header waits use 5 seconds;
+redirects are limited to two. These are separate stage limits, not a promise
+that the complete request takes at most 15 seconds. Fetches remain synchronous
+and can briefly pause rendering; the loop watchdog is the recovery backstop.
+Aircraft uses HTTP/1.1 (the provider rejects HTTP/1.0). Chunked bodies are
+decoded under the same deadlines and size cap, with bounded framing metadata;
+normal TLS closure is accepted for close-delimited bodies.
+
+**Large API metadata stays out of the contact document.** Body limits are
+256 KiB for aircraft, 1 MiB for plows and 128 KiB for radar. Bodies are stored
+in PSRAM, and JSON filters retain only fields the renderer uses. A measured
+511 response was 258 KB, mostly repeated icon graphics that the device never
+draws. Discarding those fields avoids substantial internal-heap pressure.
+Radar PNGs are decoded from the complete bounded buffer, with expected
+dimensions and decode completion checked before a frame is accepted.
+
+**Touch failures cannot become arbitrary touch counts.** The former
+TAMC_GT911 1.0.2 driver converted a failed `Wire.read()` into `0xff`, interpreted
+it as 15 contacts and wrote past its five-contact array. On this build the
+overwrite corrupted other members of the touch object, including its I²C
+address. The replacement checks every transaction and read, rejects invalid
+counts and coordinates, and reads only the first contact needed by LVGL.
+It applies a 20 ms bus timeout and acknowledges frames without rewriting the
+controller's factory configuration. The TAMC library is no longer linked.
+
+The [October 23 freeze investigation](docs/2026-10-23-freeze-investigation.md)
+records the evidence, remaining uncertainty and host regression test commands.
 
 **There is no heap-fragmentation figure in `/status`, deliberately.**
 `heap_caps_get_largest_free_block()` walks and poison-checks every block under

@@ -4,12 +4,15 @@
 #include "weather.h"
 #include "backlight.h"
 #include "timekeep.h"
+#include "diagnostics.h"
+#include "touch_input.h"
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WebServer.h>
 #include <ESPmDNS.h>
 #include <esp_system.h>
 #include <esp_heap_caps.h>
+#include <ArduinoJson.h>
 
 SysStats stats;
 
@@ -45,6 +48,7 @@ void status_boot_report() {
     stats.heap_at_boot = ESP.getFreeHeap();
     Serial.printf("Reset reason: %d (%s)   free heap %u\r\n",
                   (int)r, stats.reset_reason, (unsigned)stats.heap_at_boot);
+    diagnostics_begin();
 }
 
 void status_mark_settled() {
@@ -86,77 +90,125 @@ static void handle_status() {
     }
     uint32_t free_heap = ESP.getFreeHeap();
 
-    static char b[1800];
-    int n = snprintf(b, sizeof(b),
-      "{\n"
-      "  \"name\": \"Plane or Plow\",\n"
-      "  \"uptime_s\": %lu,\n"
-      "  \"uptime\": \"%luh %lum\",\n"
-      "  \"reset_reason\": \"%s\",\n"
-      "  \"clock\": { \"valid\": %s, \"local\": \"%s\", \"tz\": \"%s\",\n"
-      "              \"synced_s_ago\": %lu, \"schedule\": \"%02d:%02d-%02d:%02d\" },\n"
-      "  \"heap\": {\n"
-      "    \"free\": %u,\n"
-      "    \"min_free\": %u,\n"
-      "    \"at_boot\": %u,\n"
-      "    \"settled\": %u,\n"
-      "    \"drift_since_settled\": %ld\n"
-      "  },\n"
-      "  \"psram_free\": %u,\n"
-      "  \"loop_stack_free\": %u,\n"
-      "  \"wifi\": { \"ip\": \"%s\", \"rssi\": %d, \"reconnects\": %lu },\n"
-      "  \"contacts\": {\n"
-      "    \"aircraft\": %d, \"plows\": %d,\n"
-      "    \"nearest_kind\": \"%s\", \"nearest_label\": \"%s\", \"nearest_km\": %.1f\n"
-      "  },\n"
-      "  \"radar\": {\n"
-      "    \"valid\": %s, \"fetches\": %lu, \"failures\": %lu,\n"
-      "    \"last_ms\": %lu, \"last_bytes\": %lu,\n"
-      "    \"inbound\": %s, \"inbound_km\": %.0f, \"inbound_bearing\": %.0f\n"
-      "  },\n"
-      "  \"polls\": {\n"
-      "    \"aircraft_ok\": %lu, \"aircraft_fail\": %lu,\n"
-      "    \"aircraft_filtered_last\": %lu,\n"
-      "    \"plow_ok\": %lu, \"plow_fail\": %lu\n"
-      "  },\n"
-      "  \"backlight\": { \"duty\": %u, \"percent\": %u, \"manual\": %s,\n"
-      "                  \"daytime\": %s,\n"
-      "                  \"transitions\": %lu, \"last_transition\": \"%s\" }\n"
-      "}\n",
-      (unsigned long)up, (unsigned long)(up / 3600), (unsigned long)((up % 3600) / 60),
-      stats.reset_reason,
-      time_valid() ? "true" : "false", clock_str, HOME_TZ,
-      (unsigned long)time_since_sync_s(),
-      SCHEDULE_ON_HOUR, SCHEDULE_ON_MIN, SCHEDULE_OFF_HOUR, SCHEDULE_OFF_MIN,
-      (unsigned)free_heap,
-      (unsigned)ESP.getMinFreeHeap(),
-      (unsigned)stats.heap_at_boot,
-      (unsigned)stats.heap_settled,
-      stats.heap_settled ? (long)free_heap - (long)stats.heap_settled : 0L,
-      (unsigned)ESP.getFreePsram(),
-      (unsigned)uxTaskGetStackHighWaterMark(NULL),
-      WiFi.localIP().toString().c_str(), (int)WiFi.RSSI(),
-      (unsigned long)stats.wifi_reconnects,
-      proximity.aircraft_count, proximity.plow_count,
-      near_kind, near_label, near_km,
-      weather_valid ? "true" : "false",
-      (unsigned long)stats.radar_fetches, (unsigned long)stats.radar_failures,
-      (unsigned long)stats.radar_last_ms, (unsigned long)stats.radar_last_bytes,
-      weather_inbound ? "true" : "false",
-      weather_inbound ? weather_inbound_km : 0.0f,
-      weather_inbound ? weather_inbound_bearing : 0.0f,
-      (unsigned long)stats.air_ok, (unsigned long)stats.air_fail,
-      (unsigned long)stats.air_filtered,
-      (unsigned long)stats.plow_ok, (unsigned long)stats.plow_fail,
-      (unsigned)backlight_duty(), (unsigned)((backlight_duty() * 100) / 255),
-      backlight_manual() ? "true" : "false",
-      backlight_is_daytime() ? "true" : "false",
-      (unsigned long)stats.bl_transitions, stats.bl_last);
+    // ArduinoJson escapes API-supplied labels, quotes, and control characters.
+    // A fixed output buffer bounds the response without the extra String copy.
+    JsonDocument doc;
+    doc["name"] = "Plane or Plow";
+    doc["uptime_s"] = up;
+    char uptime[32];
+    snprintf(uptime, sizeof(uptime), "%luh %lum", (unsigned long)(up / 3600),
+             (unsigned long)((up % 3600) / 60));
+    doc["uptime"] = uptime;
+    doc["reset_reason"] = stats.reset_reason;
 
-    if (n < 0 || n >= (int)sizeof(b)) {
-        server.send(500, "text/plain", "status buffer overflow");
+    const DiagnosticsStatus &diag = diagnostics_status();
+    const DiagnosticBreadcrumb &current = diagnostics_current();
+    JsonObject diagnostic = doc["diagnostics"].to<JsonObject>();
+    diagnostic["build"] = diagnostics_build();
+    char boot_id[9];
+    snprintf(boot_id, sizeof(boot_id), "%08lx", (unsigned long)diag.boot_id);
+    diagnostic["boot_id"] = boot_id;
+    diagnostic["boot_sequence"] = diag.boot_sequence;
+    diagnostic["watchdog_active"] = diag.watchdog_active;
+    diagnostic["watchdog_timeout_s"] = LOOP_WATCHDOG_SECONDS;
+    diagnostic["phase"] = current.phase;
+    diagnostic["last_progress_age_ms"] = (uint32_t)(millis() - current.checkpoint_ms);
+    diagnostic["previous_run"] = nullptr;
+    if (diag.previous_valid) {
+        JsonObject previous = diagnostic["previous_run"].to<JsonObject>();
+        char previous_id[9];
+        snprintf(previous_id, sizeof(previous_id), "%08lx", (unsigned long)diag.previous_boot_id);
+        previous["boot_id"] = previous_id;
+        previous["phase"] = diag.previous.phase;
+        previous["phase_started_ms"] = diag.previous.phase_started_ms;
+        previous["phase_started_epoch"] = diag.previous.phase_started_epoch;
+        previous["last_progress_ms"] = diag.previous.checkpoint_ms;
+        previous["last_progress_epoch"] = diag.previous.checkpoint_epoch;
+    }
+    diagnostic["breadcrumb_retention"] = "RTC RAM; lost on power-off";
+
+    const TouchStats &touch_stats = touch_input_stats();
+    JsonObject touch = doc["touch"].to<JsonObject>();
+    touch["available"] = touch_stats.available;
+    touch["address"] = touch_stats.address;
+    touch["frames"] = touch_stats.frames;
+    touch["errors"] = touch_stats.errors;
+    touch["invalid_frames"] = touch_stats.invalid_frames;
+    touch["recoveries"] = touch_stats.recoveries;
+
+    JsonObject clock = doc["clock"].to<JsonObject>();
+    clock["valid"] = time_valid();
+    clock["local"] = clock_str;
+    clock["tz"] = HOME_TZ;
+    clock["synced_s_ago"] = time_since_sync_s();
+    char schedule[16];
+    snprintf(schedule, sizeof(schedule), "%02d:%02d-%02d:%02d",
+             SCHEDULE_ON_HOUR, SCHEDULE_ON_MIN, SCHEDULE_OFF_HOUR, SCHEDULE_OFF_MIN);
+    clock["schedule"] = schedule;
+
+    JsonObject heap = doc["heap"].to<JsonObject>();
+    heap["free"] = free_heap;
+    heap["min_free"] = ESP.getMinFreeHeap();
+    heap["at_boot"] = stats.heap_at_boot;
+    heap["settled"] = stats.heap_settled;
+    heap["drift_since_settled"] = stats.heap_settled ? (long)free_heap - (long)stats.heap_settled : 0L;
+    doc["psram_free"] = ESP.getFreePsram();
+    doc["loop_stack_free"] = uxTaskGetStackHighWaterMark(nullptr);
+
+    JsonObject wifi = doc["wifi"].to<JsonObject>();
+    wifi["ip"] = WiFi.localIP().toString();
+    wifi["rssi"] = WiFi.RSSI();
+    wifi["reconnects"] = stats.wifi_reconnects;
+
+    JsonObject contacts = doc["contacts"].to<JsonObject>();
+    contacts["aircraft"] = proximity.aircraft_count;
+    contacts["plows"] = proximity.plow_count;
+    contacts["nearest_kind"] = near_kind;
+    contacts["nearest_label"] = near_label;
+    contacts["nearest_km"] = near_km;
+
+    JsonObject radar = doc["radar"].to<JsonObject>();
+    radar["valid"] = weather_valid;
+    radar["fetches"] = stats.radar_fetches;
+    radar["failures"] = stats.radar_failures;
+    radar["last_ms"] = stats.radar_last_ms;
+    radar["last_bytes"] = stats.radar_last_bytes;
+    radar["inbound"] = weather_inbound;
+    radar["inbound_km"] = weather_inbound ? weather_inbound_km : 0.0f;
+    radar["inbound_bearing"] = weather_inbound ? weather_inbound_bearing : 0.0f;
+
+    JsonObject polls = doc["polls"].to<JsonObject>();
+    polls["aircraft_ok"] = stats.air_ok;
+    polls["aircraft_fail"] = stats.air_fail;
+    polls["aircraft_filtered_last"] = stats.air_filtered;
+    polls["plow_ok"] = stats.plow_ok;
+    polls["plow_fail"] = stats.plow_fail;
+    polls["aircraft_download_age_s"] = nullptr;
+    polls["plow_download_age_s"] = nullptr;
+    const uint32_t air_age = millis() - stats.air_last_ok_ms;
+    const uint32_t plow_age = millis() - stats.plow_last_ok_ms;
+    if (stats.air_ok) polls["aircraft_download_age_s"] = air_age / 1000;
+    if (stats.plow_ok) polls["plow_download_age_s"] = plow_age / 1000;
+    polls["aircraft_download_stale"] = !stats.air_ok || air_age >= 180000;
+    polls["plow_download_stale"] = !stats.plow_ok || plow_age >= 600000;
+    // 511 provides no per-position observation time. A fresh download alone
+    // cannot establish when a plow last moved or transmitted its location.
+    polls["plow_position_timestamp_available"] = false;
+
+    JsonObject backlight = doc["backlight"].to<JsonObject>();
+    backlight["duty"] = backlight_duty();
+    backlight["percent"] = (backlight_duty() * 100) / 255;
+    backlight["manual"] = backlight_manual();
+    backlight["daytime"] = backlight_is_daytime();
+    backlight["transitions"] = stats.bl_transitions;
+    backlight["last_transition"] = stats.bl_last;
+
+    static char b[4096];
+    if (doc.overflowed() || measureJson(doc) >= sizeof(b)) {
+        server.send(500, "text/plain", "status allocation or buffer overflow");
         return;
     }
+    serializeJson(doc, b, sizeof(b));
     server.sendHeader("Cache-Control", "no-store");
     server.send(200, "application/json", b);
 }

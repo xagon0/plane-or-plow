@@ -1,7 +1,5 @@
 #include <Arduino.h>
 #include <Arduino_GFX_Library.h>
-#include <Wire.h>
-#include <TAMC_GT911.h>
 #include <lvgl.h>
 #include <esp_system.h>
 
@@ -11,6 +9,8 @@
 #include "backlight.h"
 #include "status.h"
 #include "timekeep.h"
+#include "diagnostics.h"
+#include "touch_input.h"
 
 // Every API fetch runs an mbedTLS handshake on the Arduino loop task, whose
 // stack defaults to 8 KB. Measured peak was ~6.3 KB of that, and a reconnect
@@ -55,9 +55,6 @@ Arduino_RGB_Display *gfx = new Arduino_RGB_Display(
     st7701_type9_init_operations, sizeof(st7701_type9_init_operations)
 );
 
-// --- Touch Setup ---
-TAMC_GT911 touch(TOUCH_SDA, TOUCH_SCL, -1, -1, SCREEN_W, SCREEN_H);
-
 // --- LVGL buffers ---
 static lv_disp_draw_buf_t draw_buf;
 static lv_color_t *buf1;
@@ -79,11 +76,11 @@ void lvgl_flush_cb(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color
 
 // --- LVGL touch read callback ---
 void lvgl_touchpad_read(lv_indev_drv_t *indev, lv_indev_data_t *data) {
-    touch.read();
-    if (touch.isTouched) {
+    TouchPoint point;
+    if (touch_input_read(point)) {
         data->state = LV_INDEV_STATE_PR;
-        data->point.x = touch.points[0].x;
-        data->point.y = touch.points[0].y;
+        data->point.x = point.x;
+        data->point.y = point.y;
     } else {
         data->state = LV_INDEV_STATE_REL;
     }
@@ -96,6 +93,7 @@ void setup() {
     status_boot_report();
 
     // Initialize display
+    diagnostics_phase("setup-display");
     if (!gfx->begin()) {
         Serial.println("Display init FAILED!");
         while (1) delay(100);
@@ -106,18 +104,22 @@ void setup() {
     Serial.println("Display OK");
 
     // Initialize touch
-    Wire.begin(TOUCH_SDA, TOUCH_SCL);
-    touch.begin();
-    touch.setRotation(ROTATION_INVERTED);
-    Serial.println("Touch OK");
+    diagnostics_phase("setup-touch");
+    touch_input_init(TOUCH_SDA, TOUCH_SCL, SCREEN_W, SCREEN_H);
 
     // Initialize LVGL
+    diagnostics_phase("setup-lvgl");
     lv_init();
 
     // Allocate draw buffers in PSRAM (double-buffered, 1/10th screen each)
     size_t buf_size = SCREEN_W * (SCREEN_H / 10);
     buf1 = (lv_color_t *)heap_caps_malloc(buf_size * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
     buf2 = (lv_color_t *)heap_caps_malloc(buf_size * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
+    if (!buf1 || !buf2) {
+        diagnostics_phase("setup-draw-buffer-failed");
+        Serial.println("LVGL draw buffer allocation FAILED; watchdog will restart");
+        while (true) delay(100);
+    }
     lv_disp_draw_buf_init(&draw_buf, buf1, buf2, buf_size);
 
     // Register display driver
@@ -152,6 +154,7 @@ void setup() {
     // ambient_init() composites the static background, so painting it before
     // network_init() (which blocks for up to 15s on the WiFi handshake) means
     // the scope is already on screen and fading up while we connect.
+    diagnostics_phase("setup-ambient");
     ambient_init();
     backlight_init();
 
@@ -161,18 +164,33 @@ void setup() {
         delay(5);
     }
 
+    diagnostics_checkpoint();
+    diagnostics_phase("setup-network");
     network_init();
+    diagnostics_checkpoint();
+    diagnostics_phase("setup-services");
     time_init();          // after WiFi: SNTP started earlier just fails
     status_init();
 
     status_mark_settled();
     Serial.println("Plane or Plow — scope ready");
+    diagnostics_phase("loop-ready");
+    diagnostics_checkpoint();
 }
 
 void loop() {
+    diagnostics_phase("lvgl");
     lv_timer_handler();
+    diagnostics_checkpoint();
+    diagnostics_phase("network-expiry");
+    network_tick();
+    diagnostics_phase("backlight-clock");
     backlight_update();
     time_tick();
+    diagnostics_phase("status-server");
     status_update();
+    diagnostics_phase("loop-idle");
+    diagnostics_update();
+    diagnostics_checkpoint();
     delay(5);
 }

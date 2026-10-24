@@ -16,8 +16,10 @@ struct SysStats {
     uint32_t radar_last_ms   = 0;
     uint32_t radar_last_bytes = 0;
     uint32_t air_ok    = 0, air_fail  = 0;
+    uint32_t air_last_ok_ms = 0; // last successful download, not position age
     uint32_t air_filtered = 0;   // ground/surface contacts dropped last poll
     uint32_t plow_ok   = 0, plow_fail = 0;
+    uint32_t plow_last_ok_ms = 0;
     uint32_t wifi_reconnects = 0;
     // Backlight schedule history, so "did it dim last night?" is answerable
     // the next morning from /status alone, without a serial cable.

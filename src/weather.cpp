@@ -3,6 +3,8 @@
 #include "ambient.h"
 #include "wx_ramp.h"
 #include "status.h"
+#include "http_body.h"
+#include "diagnostics.h"
 #include <Arduino.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
@@ -34,6 +36,15 @@ static uint8_t *wide_grid = NULL;
 static uint8_t *decode_dst = NULL;
 static int      decode_n   = 0;
 static uint32_t decode_hits = 0;
+static bool decode_done = false;
+
+static void png_done_cb(pngle_t *) { decode_done = true; }
+
+static uint32_t png_u32(const char *p) {
+    const uint8_t *b = (const uint8_t *)p;
+    return ((uint32_t)b[0] << 24) | ((uint32_t)b[1] << 16) |
+           ((uint32_t)b[2] << 8) | b[3];
+}
 
 // Nearest neighbour against the EC ramp. The server antialiases when it
 // resamples to our bbox, so tiles carry many more colours than the palette.
@@ -65,7 +76,9 @@ static void png_draw_cb(pngle_t *p, uint32_t x, uint32_t y,
 static bool wx_debug = true;   // first fetch prints diagnostics
 
 static bool fetch_tile(uint8_t *dst, int n, float box_km, const char *iso_time) {
+    DiagnosticsPhase phase("radar_fetch");
     if (WiFi.status() != WL_CONNECTED) return false;
+    const uint32_t started = millis();
 
     float dlat = box_km / 111.32f;
     float dlon = box_km / (111.32f * cosf((float)HOME_LAT * (float)M_PI / 180.0f));
@@ -89,13 +102,7 @@ static bool fetch_tile(uint8_t *dst, int n, float box_km, const char *iso_time) 
     HTTPClient http;
     http.begin(client, url);
     http.setUserAgent(HTTP_USER_AGENT);
-    http.setTimeout(9000);
-    // HTTP/1.0 turns off chunked transfer encoding. We read the body through
-    // getStreamPtr() to feed the PNG decoder incrementally, and that stream is
-    // raw — chunk-size headers would land in the decoder as garbage. (The plow
-    // fetch needs this for the same reason.)
-    http.useHTTP10(true);
-    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+    configure_http(http, client);
 
     int code = http.GET();
     if (code != 200) {
@@ -107,77 +114,55 @@ static bool fetch_tile(uint8_t *dst, int n, float box_km, const char *iso_time) 
     }
     if (wx_debug) Serial.printf("Radar URL: %s\r\n", url);
 
+    HttpBodyBuffer payload;
+    bool ok = read_http_body(http, payload, 128 * 1024, WX_READ_MS);
+    http.end();
+    stats.radar_fetches++;
+    stats.radar_last_bytes = payload.size;
+    // Validate dimensions before asking pngle to allocate row buffers or
+    // decompress. An HTML error page or wrong-sized PNG is not a radar frame.
+    static const uint8_t signature[] = {137, 80, 78, 71, 13, 10, 26, 10};
+    if (!ok || payload.size < 24 ||
+        memcmp(payload.data, signature, sizeof(signature)) != 0 ||
+        memcmp(payload.data + 12, "IHDR", 4) != 0 ||
+        png_u32(payload.data + 16) != (uint32_t)n ||
+        png_u32(payload.data + 20) != (uint32_t)n) {
+        Serial.println("Radar: incomplete body or invalid PNG dimensions");
+        stats.radar_failures++;
+        stats.radar_last_ms = millis() - started;
+        return false;
+    }
+
     pngle_t *pngle = pngle_new();
-    if (!pngle) { http.end(); return false; }
+    if (!pngle) { stats.radar_failures++; return false; }
 
     memset(dst, 0, (size_t)n * n);
     decode_dst = dst;
     decode_n = n;
     decode_hits = 0;
+    decode_done = false;
     pngle_set_draw_callback(pngle, png_draw_cb);
-
-    WiFiClient *stream = http.getStreamPtr();
-    // Static, not stack: this runs on the Arduino loop task alongside an
-    // mbedTLS handshake, and 1.2 KB of locals here is a meaningful slice.
-    static uint8_t buf[512];
-    static char head[161];
-    head[0] = 0;
-    int head_len = 0;
-    int total = 0;
-    bool ok = true;
-    int remaining = http.getSize();
-
-    // Both bounds matter. This loop runs inside an LVGL timer callback, so
-    // every millisecond spent here is a millisecond the display is frozen.
-    const uint32_t started = millis();
-    uint32_t last_data = started;
-
-    while (http.connected() && (remaining > 0 || remaining == -1)) {
-        if (millis() - started > WX_READ_MS) {
-            Serial.println("Radar: read exceeded budget, abandoning tile");
-            ok = false;
-            break;
-        }
-        size_t avail = stream->available();
-        if (!avail) {
-            if (millis() - last_data > WX_STALL_MS) {
-                Serial.println("Radar: stream stalled, abandoning tile");
-                ok = false;
-                break;
-            }
-            delay(2);
-            continue;
-        }
-        last_data = millis();
-        int got = stream->readBytes(buf, avail > sizeof(buf) ? sizeof(buf) : avail);
-        if (got <= 0) break;
-        total += got;
-        if (head_len < (int)sizeof(head) - 1) {
-            int c = got; if (c > (int)sizeof(head) - 1 - head_len) c = sizeof(head) - 1 - head_len;
-            memcpy(head + head_len, buf, c); head_len += c; head[head_len] = 0;
-        }
-        if (pngle_feed(pngle, buf, got) < 0) {
-            Serial.printf("Radar PNG error: %s\r\n", pngle_error(pngle));
-            Serial.printf("  body head: %s\r\n", head);
-            ok = false;
-            break;
-        }
-        if (remaining > 0) remaining -= got;
+    pngle_set_done_callback(pngle, png_done_cb);
+    // Feed the complete bounded PSRAM payload. pngle can leave a partial PNG
+    // chunk unconsumed; the old per-socket-read loop discarded that suffix.
+    int consumed = pngle_feed(pngle, payload.data, payload.size);
+    ok = consumed >= 0 && (size_t)consumed == payload.size && decode_done;
+    if (!ok) {
+        const char *error = pngle_error(pngle);
+        Serial.printf("Radar: invalid/incomplete PNG: %s\r\n",
+                      error ? error : "missing end marker");
     }
 
     pngle_destroy(pngle);
-    http.end();
     decode_dst = NULL;
 
     wx_debug = false;
-    stats.radar_fetches++;
     if (!ok) stats.radar_failures++;
     stats.radar_last_ms = millis() - started;
-    stats.radar_last_bytes = total;
     if (ok) {
-        Serial.printf("Radar tile %dx%d (%.0fkm): %d bytes, %lu cells, %lu ms, "
+        Serial.printf("Radar tile %dx%d (%.0fkm): %u bytes, %lu cells, %lu ms, "
                       "heap %u, stack left %u\r\n",
-                      n, n, box_km * 2.0f, total, (unsigned long)decode_hits,
+                      n, n, box_km * 2.0f, (unsigned)payload.size, (unsigned long)decode_hits,
                       (unsigned long)(millis() - started),
                       (unsigned)ESP.getFreeHeap(),
                       (unsigned)uxTaskGetStackHighWaterMark(NULL));
@@ -316,6 +301,7 @@ static void wx_tick_cb(lv_timer_t *timer) {
             weather_valid = true;
             ambient_scene_dirty();
         }
+        diagnostics_checkpoint();
         return;
     }
 
@@ -332,6 +318,7 @@ static void wx_tick_cb(lv_timer_t *timer) {
                 frame_count++;
                 Serial.printf("Radar: backfilled %s (%d frames held)\r\n", iso, frame_count);
             }
+            diagnostics_checkpoint();
         } else {
             backfill_steps--;        // NTP not up yet; try the same step again
         }
@@ -343,6 +330,7 @@ static void wx_tick_cb(lv_timer_t *timer) {
     if (wide_grid && (last_wide_ms == 0 || (now - last_wide_ms) >= WX_WIDE_POLL_MS)) {
         last_wide_ms = now;
         if (fetch_tile(wide_grid, WX_WIDE_N, WX_WIDE_BOX_KM, NULL)) evaluate_inbound();
+        diagnostics_checkpoint();
     }
 }
 
