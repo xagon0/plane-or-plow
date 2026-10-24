@@ -216,6 +216,7 @@ Elsewhere you'd want to swap two things:
 | `src/weather.cpp` | GeoMet radar: bounded fetch, complete PNG validation/decode, history, replay, wide-area sweep |
 | `src/network.cpp` | Aircraft and plow polling, contact tracking |
 | `src/http_body.h` | Response-body size limits, idle timeout and total read deadline |
+| `src/feed_http.cpp` | Single background HTTP worker and main-task completion handoff |
 | `src/diagnostics.cpp` | Loop watchdog, RTC phase breadcrumbs and serial health reports |
 | `src/touch_input.cpp` | Checked GT911 I²C reads, release handling and recovery backoff |
 | `src/touch_frame.h` | Touch status, packet-length and coordinate validation |
@@ -274,11 +275,29 @@ The replacement reader gives up after 2.5 seconds without data or 15 seconds
 of body reading (9 seconds for radar), and rejects truncated responses. TLS
 handshakes have an 8-second timeout; connection/header waits use 5 seconds;
 redirects are limited to two. These are separate stage limits, not a promise
-that the complete request takes at most 15 seconds. Fetches remain synchronous
-and can briefly pause rendering; the loop watchdog is the recovery backstop.
+that the complete request takes at most 15 seconds. HTTP/TLS downloads run on
+a dedicated background worker, so socket waits do not pause rendering or touch.
+The worker and display task each join the 60-second watchdog.
 Aircraft uses HTTP/1.1 (the provider rejects HTTP/1.0). Chunked bodies are
 decoded under the same deadlines and size cap, with bounded framing metadata;
 normal TLS closure is accepted for close-delimited bodies.
+
+**One background download at a time.** Aircraft, plow and radar timers submit
+to one shared worker on core 0. A busy slot is retried after 250 ms so timers
+with the same period cannot starve each other. The response stays in PSRAM;
+JSON/PNG decoding, contact updates and all LVGL operations remain on the main
+task. The slot stays occupied until the completion callback returns and the
+response is freed, preventing overlapping TLS/parser allocations. A radar
+result arriving during replay waits in a separate decoded buffer until replay
+finishes. Tapping starts replay and queues a refresh without waiting for it.
+The title displays `RADAR REPLAY 1/10` and advances through the stored frames,
+including when no precipitation is visible. This is precipitation radar,
+not a cloud-cover image.
+
+`feed_http` in `/status` reports worker readiness, watchdog state, active job,
+request age and completed jobs. `render.frames` counts rendered frames since
+startup and `render.max_frame_gap_ms` records the largest gap after setup;
+they make it possible to check rendering while a network request is in flight.
 
 **Large API metadata stays out of the contact document.** Body limits are
 256 KiB for aircraft, 1 MiB for plows and 128 KiB for radar. Bodies are stored
@@ -299,6 +318,8 @@ controller's factory configuration. The TAMC library is no longer linked.
 
 The [October 23 freeze investigation](docs/2026-10-23-freeze-investigation.md)
 records the evidence, remaining uncertainty and host regression test commands.
+The [replay follow-up](docs/2026-10-23-replay-follow-up.md) records the live count
+check and removal of synchronous download pauses.
 
 **There is no heap-fragmentation figure in `/status`, deliberately.**
 `heap_caps_get_largest_free_block()` walks and poison-checks every block under

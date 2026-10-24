@@ -11,13 +11,11 @@
 #include "timekeep.h"
 #include "diagnostics.h"
 #include "touch_input.h"
+#include "feed_http.h"
+#include "weather.h"
 
-// Every API fetch runs an mbedTLS handshake on the Arduino loop task, whose
-// stack defaults to 8 KB. Measured peak was ~6.3 KB of that, and a reconnect
-// takes the deepest path because it cannot resume a TLS session — too little
-// margin for three separate HTTPS clients. This macro overrides the weak
-// getArduinoLoopTaskStackSize() in the framework; a -D build flag does not
-// work, because the framework archive is cached and not rebuilt.
+// Rendering and bounded JSON/PNG completion callbacks run here. TLS and
+// socket waits use their own 16 KiB worker stack, never the LVGL task.
 SET_LOOP_TASK_STACK_SIZE(16384);
 
 // --- Pin Definitions ---
@@ -91,6 +89,10 @@ void setup() {
     Serial.println("ESP32-4848S040 LVGL Setup");
 
     status_boot_report();
+    if (!feed_http_begin()) {
+        Serial.println("Feed worker startup failed; watchdog will restart");
+        while (true) delay(100);
+    }
 
     // Initialize display
     diagnostics_phase("setup-display");
@@ -172,6 +174,7 @@ void setup() {
     time_init();          // after WiFi: SNTP started earlier just fails
     status_init();
 
+    ambient_reset_frame_timing();
     status_mark_settled();
     Serial.println("Plane or Plow — scope ready");
     diagnostics_phase("loop-ready");
@@ -182,6 +185,9 @@ void loop() {
     diagnostics_phase("lvgl");
     lv_timer_handler();
     diagnostics_checkpoint();
+    diagnostics_phase("feed-completion");
+    feed_http_tick();
+    weather_tick();
     diagnostics_phase("network-expiry");
     network_tick();
     diagnostics_phase("backlight-clock");

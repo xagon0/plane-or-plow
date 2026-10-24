@@ -222,6 +222,13 @@ static void compose_scene() {
     if (!scene_buf || !bg_buf) return;
     memcpy(scene_buf, bg_buf, buf_bytes);
     if (!weather_valid || !weather_grid) return;
+    // An empty radar frame is common. Avoid a full-screen interpolation pass
+    // when every cell is below the same threshold used by the compositor.
+    bool visible_echo = false;
+    for (size_t i = 0; i < (size_t)WX_N * WX_N; ++i) {
+        if (weather_grid[i] > 5) { visible_echo = true; break; }
+    }
+    if (!visible_echo) return;
 
     const float cell_px = (WX_BOX_KM * 2.0f * pixels_per_km) / (float)WX_N;
     const float half = (float)WX_N * 0.5f;
@@ -488,11 +495,21 @@ static void draw_inbound(uint32_t now) {
 // Frame
 // ---------------------------------------------------------------------------
 static uint32_t last_frame_ms = 0;
+static uint32_t rendered_frames = 0;
+static uint32_t max_frame_gap_ms = 0;
+uint32_t ambient_frame_count() { return rendered_frames; }
+uint32_t ambient_max_frame_gap_ms() { return max_frame_gap_ms; }
+void ambient_reset_frame_timing() {
+    rendered_frames = max_frame_gap_ms = last_frame_ms = 0;
+}
 
 static void render_frame() {
     if (!canvas_buf || !bg_buf) return;
 
     uint32_t now = millis();
+    if (last_frame_ms && now - last_frame_ms > max_frame_gap_ms)
+        max_frame_gap_ms = now - last_frame_ms;
+    ++rendered_frames;
     float dt_s = (last_frame_ms == 0) ? 0.033f : (float)(now - last_frame_ms) / 1000.0f;
     if (dt_s > 0.5f) dt_s = 0.5f;
     last_frame_ms = now;

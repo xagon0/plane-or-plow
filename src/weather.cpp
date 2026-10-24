@@ -3,12 +3,10 @@
 #include "ambient.h"
 #include "wx_ramp.h"
 #include "status.h"
-#include "http_body.h"
+#include "feed_http.h"
 #include "diagnostics.h"
 #include <Arduino.h>
 #include <WiFi.h>
-#include <HTTPClient.h>
-#include <WiFiClientSecure.h>
 #include <esp_heap_caps.h>
 #include <pngle.h>
 #include <math.h>
@@ -70,66 +68,32 @@ static void png_draw_cb(pngle_t *p, uint32_t x, uint32_t y,
 }
 
 // ---------------------------------------------------------------------------
-// Fetch one GetMap tile and decode it straight into `dst`.
-// `iso_time` may be NULL, which asks the server for its latest frame.
+// Decode a completed response on the UI task. The HTTP worker owns the
+// response buffer until this callback returns; no renderer state crosses cores.
 // ---------------------------------------------------------------------------
-static bool wx_debug = true;   // first fetch prints diagnostics
-
-static bool fetch_tile(uint8_t *dst, int n, float box_km, const char *iso_time) {
-    DiagnosticsPhase phase("radar_fetch");
-    if (WiFi.status() != WL_CONNECTED) return false;
+static bool decode_tile(const FeedHttpResult &response, uint8_t *dst, int n) {
+    DiagnosticsPhase phase("radar_decode");
     const uint32_t started = millis();
-
-    float dlat = box_km / 111.32f;
-    float dlon = box_km / (111.32f * cosf((float)HOME_LAT * (float)M_PI / 180.0f));
-
-    // WMS 1.3.0 with EPSG:4326 takes bbox in lat,lon order.
-    static char url[512];
-    int len = snprintf(url, sizeof(url),
-        "%s?service=WMS&version=1.3.0&request=GetMap"
-        "&layers=%s&styles=%s&crs=EPSG:4326"
-        "&bbox=%.4f,%.4f,%.4f,%.4f&width=%d&height=%d&format=image/png",
-        WX_HOST, WX_LAYER, WX_STYLE,
-        (float)HOME_LAT - dlat, (float)HOME_LON - dlon,
-        (float)HOME_LAT + dlat, (float)HOME_LON + dlon,
-        n, n);
-    if (iso_time && len > 0 && len < (int)sizeof(url)) {
-        snprintf(url + len, sizeof(url) - len, "&time=%s", iso_time);
-    }
-
-    WiFiClientSecure client;
-    client.setInsecure();
-    HTTPClient http;
-    http.begin(client, url);
-    http.setUserAgent(HTTP_USER_AGENT);
-    configure_http(http, client);
-
-    int code = http.GET();
-    if (code != 200) {
-        Serial.printf("Radar HTTP %d\r\n", code);
-        Serial.printf("  url: %s\r\n", url);
+    stats.radar_last_ms = response.elapsed_ms;
+    if (response.code != 200) {
+        Serial.printf("Radar HTTP %d\r\n", response.code);
         stats.radar_failures++;
-        http.end();
         return false;
     }
-    if (wx_debug) Serial.printf("Radar URL: %s\r\n", url);
-
-    HttpBodyBuffer payload;
-    bool ok = read_http_body(http, payload, 128 * 1024, WX_READ_MS);
-    http.end();
     stats.radar_fetches++;
-    stats.radar_last_bytes = payload.size;
+    stats.radar_last_bytes = response.size;
+    bool ok = response.body_ok;
     // Validate dimensions before asking pngle to allocate row buffers or
     // decompress. An HTML error page or wrong-sized PNG is not a radar frame.
     static const uint8_t signature[] = {137, 80, 78, 71, 13, 10, 26, 10};
-    if (!ok || payload.size < 24 ||
-        memcmp(payload.data, signature, sizeof(signature)) != 0 ||
-        memcmp(payload.data + 12, "IHDR", 4) != 0 ||
-        png_u32(payload.data + 16) != (uint32_t)n ||
-        png_u32(payload.data + 20) != (uint32_t)n) {
+    if (!ok || response.size < 24 ||
+        memcmp(response.data, signature, sizeof(signature)) != 0 ||
+        memcmp(response.data + 12, "IHDR", 4) != 0 ||
+        png_u32(response.data + 16) != (uint32_t)n ||
+        png_u32(response.data + 20) != (uint32_t)n) {
         Serial.println("Radar: incomplete body or invalid PNG dimensions");
         stats.radar_failures++;
-        stats.radar_last_ms = millis() - started;
+        stats.radar_last_ms = response.elapsed_ms + millis() - started;
         return false;
     }
 
@@ -145,8 +109,8 @@ static bool fetch_tile(uint8_t *dst, int n, float box_km, const char *iso_time) 
     pngle_set_done_callback(pngle, png_done_cb);
     // Feed the complete bounded PSRAM payload. pngle can leave a partial PNG
     // chunk unconsumed; the old per-socket-read loop discarded that suffix.
-    int consumed = pngle_feed(pngle, payload.data, payload.size);
-    ok = consumed >= 0 && (size_t)consumed == payload.size && decode_done;
+    int consumed = pngle_feed(pngle, response.data, response.size);
+    ok = consumed >= 0 && (size_t)consumed == response.size && decode_done;
     if (!ok) {
         const char *error = pngle_error(pngle);
         Serial.printf("Radar: invalid/incomplete PNG: %s\r\n",
@@ -156,14 +120,13 @@ static bool fetch_tile(uint8_t *dst, int n, float box_km, const char *iso_time) 
     pngle_destroy(pngle);
     decode_dst = NULL;
 
-    wx_debug = false;
     if (!ok) stats.radar_failures++;
-    stats.radar_last_ms = millis() - started;
+    stats.radar_last_ms = response.elapsed_ms + millis() - started;
     if (ok) {
-        Serial.printf("Radar tile %dx%d (%.0fkm): %u bytes, %lu cells, %lu ms, "
+        Serial.printf("Radar tile %dx%d: %u bytes, %lu cells, %lu ms, "
                       "heap %u, stack left %u\r\n",
-                      n, n, box_km * 2.0f, (unsigned)payload.size, (unsigned long)decode_hits,
-                      (unsigned long)(millis() - started),
+                      n, n, (unsigned)response.size, (unsigned long)decode_hits,
+                      (unsigned long)stats.radar_last_ms,
                       (unsigned)ESP.getFreeHeap(),
                       (unsigned)uxTaskGetStackHighWaterMark(NULL));
     }
@@ -267,70 +230,117 @@ void weather_replay() {
     replay_timer = lv_timer_create(replay_step_cb, WX_REPLAY_STEP_MS, NULL);
     Serial.printf("Radar: replaying %d frames (~%d min)\r\n",
                   frame_count, frame_count * 6);
+    replay_step_cb(replay_timer); // show the oldest stored frame immediately
 }
 
 bool weather_replaying() { return replay_timer != NULL; }
+int weather_replay_frame() { return replay_timer ? (replay_idx ? replay_idx : 1) : 0; }
+int weather_history_frames() { return frame_count; }
 
 // ---------------------------------------------------------------------------
 // Poll
 // ---------------------------------------------------------------------------
+static lv_timer_t *fetch_timer = nullptr;
 static uint32_t last_current_ms = 0;
 static uint32_t last_wide_ms = 0;
 static uint8_t *scratch = NULL;
 
-// One HTTP request per tick, at most. Fetching happens on the LVGL timer, so
-// each round trip stalls the display for its duration; doing three back to back
-// would be a visible freeze rather than a hitch.
+enum class RadarJob { None, Current, Backfill, Wide };
+static RadarJob pending_job = RadarJob::None;
+static RadarJob completed_job = RadarJob::None;
+static char pending_iso[32] = {};
+
+// Apply completed downloads on the UI task, after any replay finishes. The
+// shared worker can keep fetching contacts while the decoded radar waits.
+void weather_tick() {
+    if (completed_job == RadarJob::None || weather_replaying()) return;
+    if (completed_job == RadarJob::Current) {
+        push_frame(scratch);
+        memcpy(weather_grid, scratch, (size_t)WX_N * WX_N);
+        weather_valid = true;
+        ambient_scene_dirty();
+    } else if (completed_job == RadarJob::Backfill) {
+        int oldest = (frame_head - frame_count + 1 + WX_HISTORY) % WX_HISTORY;
+        int slot = (oldest - 1 + WX_HISTORY) % WX_HISTORY;
+        memcpy(frames[slot], scratch, (size_t)WX_N * WX_N);
+        frame_count++;
+        Serial.printf("Radar: backfilled %s (%d frames held)\r\n", pending_iso, frame_count);
+    } else if (completed_job == RadarJob::Wide) {
+        evaluate_inbound();
+    }
+    completed_job = RadarJob::None;
+}
+
+static void radar_complete(const FeedHttpResult &response) {
+    // Start the next interval at completion, so a slow request cannot reclaim
+    // the slot immediately ahead of a waiting contact request.
+    if (fetch_timer) {
+        lv_timer_set_period(fetch_timer, WX_TICK_MS);
+        lv_timer_reset(fetch_timer);
+    }
+    bool wide = pending_job == RadarJob::Wide;
+    if (decode_tile(response, wide ? wide_grid : scratch, wide ? WX_WIDE_N : WX_N))
+        completed_job = pending_job;
+    pending_job = RadarJob::None;
+    weather_tick();
+}
+
+static bool queue_tile(RadarJob kind, int n, float box_km, const char *iso) {
+    FeedHttpRequest request;
+    request.label = "radar";
+    request.max_bytes = 128 * 1024;
+    request.body_timeout_ms = WX_READ_MS;
+    float dlat = box_km / 111.32f;
+    float dlon = box_km / (111.32f * cosf((float)HOME_LAT * (float)M_PI / 180.0f));
+    int len = snprintf(request.url, sizeof(request.url),
+        "%s?service=WMS&version=1.3.0&request=GetMap"
+        "&layers=%s&styles=%s&crs=EPSG:4326"
+        "&bbox=%.4f,%.4f,%.4f,%.4f&width=%d&height=%d&format=image/png",
+        WX_HOST, WX_LAYER, WX_STYLE,
+        (float)HOME_LAT - dlat, (float)HOME_LON - dlon,
+        (float)HOME_LAT + dlat, (float)HOME_LON + dlon, n, n);
+    if (len < 0 || len >= (int)sizeof(request.url)) return false;
+    if (iso) {
+        int added = snprintf(request.url + len, sizeof(request.url) - len, "&time=%s", iso);
+        if (added < 0 || added >= (int)(sizeof(request.url) - len)) return false;
+    }
+    if (!feed_http_submit(request, radar_complete)) return false;
+    pending_job = kind;
+    strlcpy(pending_iso, iso ? iso : "", sizeof(pending_iso));
+    return true;
+}
+
+// Timers only enqueue work; TLS and socket waits never run inside LVGL.
 static void wx_tick_cb(lv_timer_t *timer) {
     (void)timer;
-    if (WiFi.status() != WL_CONNECTED) return;   // retry on the next tick
-    if (weather_replaying()) return;             // don't rewrite the grid mid-replay
-
+    if (WiFi.status() != WL_CONNECTED || weather_replaying() ||
+        pending_job != RadarJob::None || completed_job != RadarJob::None) {
+        lv_timer_set_period(timer, WX_TICK_MS);
+        return;
+    }
+    // Contact and radar timers can become due together. Retry briefly after
+    // contention so the earlier timer cannot starve the other source.
+    if (feed_http_busy()) { lv_timer_set_period(timer, 250); return; }
+    lv_timer_set_period(timer, WX_TICK_MS);
     if (!scratch) {
         scratch = (uint8_t *)heap_caps_malloc((size_t)WX_N * WX_N, MALLOC_CAP_SPIRAM);
         if (!scratch) return;
     }
-
     uint32_t now = millis();
-
     if (!weather_valid || (now - last_current_ms) >= WX_POLL_MS) {
-        last_current_ms = now;
-        if (fetch_tile(scratch, WX_N, WX_BOX_KM, NULL)) {
-            push_frame(scratch);
-            memcpy(weather_grid, scratch, (size_t)WX_N * WX_N);
-            weather_valid = true;
-            ambient_scene_dirty();
-        }
-        diagnostics_checkpoint();
+        if (queue_tile(RadarJob::Current, WX_N, WX_BOX_KM, nullptr)) last_current_ms = now;
         return;
     }
-
-    // Backfill walks back in time one frame per tick, so a replay is worth
-    // watching a few minutes after boot instead of an hour.
-    if (frame_count < WX_HISTORY) {
-        backfill_steps++;
-        char iso[32];
-        if (utc_iso_step(backfill_steps, iso, sizeof(iso))) {
-            if (fetch_tile(scratch, WX_N, WX_BOX_KM, iso)) {
-                int oldest = (frame_head - frame_count + 1 + WX_HISTORY) % WX_HISTORY;
-                int slot = (oldest - 1 + WX_HISTORY) % WX_HISTORY;
-                memcpy(frames[slot], scratch, (size_t)WX_N * WX_N);
-                frame_count++;
-                Serial.printf("Radar: backfilled %s (%d frames held)\r\n", iso, frame_count);
-            }
-            diagnostics_checkpoint();
-        } else {
-            backfill_steps--;        // NTP not up yet; try the same step again
-        }
-        return;
-    }
-
-    // last_wide_ms == 0 means we have never swept; do it as soon as the
-    // backfill is out of the way rather than waiting out a full interval.
+    // A failed historical tile must not postpone the independent wide scan
+    // indefinitely. Service it when due, before trying another history frame.
     if (wide_grid && (last_wide_ms == 0 || (now - last_wide_ms) >= WX_WIDE_POLL_MS)) {
-        last_wide_ms = now;
-        if (fetch_tile(wide_grid, WX_WIDE_N, WX_WIDE_BOX_KM, NULL)) evaluate_inbound();
-        diagnostics_checkpoint();
+        if (queue_tile(RadarJob::Wide, WX_WIDE_N, WX_WIDE_BOX_KM, nullptr)) last_wide_ms = now;
+        return;
+    }
+    if (frame_count < WX_HISTORY) {
+        char iso[32];
+        if (utc_iso_step(backfill_steps + 1, iso, sizeof(iso)) &&
+            queue_tile(RadarJob::Backfill, WX_N, WX_BOX_KM, iso)) ++backfill_steps;
     }
 }
 
@@ -355,7 +365,7 @@ void weather_init() {
     // weather_init() runs before network_init(), so the first ticks fire with
     // WiFi still down. A short tick period lets it retry, backfill quickly, and
     // then settle into fetching only on the 6-minute scan cadence.
-    lv_timer_create(wx_tick_cb, WX_TICK_MS, NULL);
+    fetch_timer = lv_timer_create(wx_tick_cb, WX_TICK_MS, NULL);
 
     Serial.printf("Radar: %dx%d over %.0f km, %d-frame history\r\n",
                   WX_N, WX_N, WX_BOX_KM * 2.0f, WX_HISTORY);

@@ -3,6 +3,7 @@
 #include "config.h"
 #include "theme.h"
 #include "timekeep.h"
+#include "weather.h"
 #include <Arduino.h>
 #include <WiFi.h>
 #include <lvgl.h>
@@ -94,6 +95,17 @@ static void update_nearest() {
 
 static void hud_tick_cb(lv_timer_t *timer) {
     (void)timer;
+
+    if (weather_replaying()) {
+        char replay[40];
+        snprintf(replay, sizeof(replay), "RADAR REPLAY %d/%d",
+                 weather_replay_frame(), weather_history_frames());
+        lv_label_set_text(lbl_title, replay);
+        lv_obj_set_style_text_letter_space(lbl_title, 1, 0);
+    } else {
+        lv_label_set_text(lbl_title, "PLANE OR PLOW");
+        lv_obj_set_style_text_letter_space(lbl_title, 4, 0);
+    }
 
     char buf[12];
 

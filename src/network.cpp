@@ -2,13 +2,12 @@
 #include "config.h"
 #include "ambient.h"
 #include "status.h"
-#include "http_body.h"
+#include "feed_http.h"
 #include "diagnostics.h"
 #include "contact_freshness.h"
+#include "poll_schedule.h"
 #include <Arduino.h>
 #include <WiFi.h>
-#include <HTTPClient.h>
-#include <WiFiClientSecure.h>
 #include <ArduinoJson.h>
 #include <math.h>
 #include <string.h>
@@ -62,11 +61,23 @@ static void wifi_ensure() {
 // ---------------------------------------------------------------------------
 static lv_timer_t *poll_timer = NULL;
 static unsigned long boost_deadline = 0;
+static PollSchedule poll_schedule;
 
 static void cancel_boost() {
     if (!boost_deadline) return;
     boost_deadline = 0;
     lv_timer_set_period(poll_timer, API_POLL_MS);
+}
+
+static void contact_request_finished() {
+    // Start the next interval when our request finishes. If a slow request
+    // outlives the timer, retrying our own slot every 250ms could beat a waiting
+    // radar request to the slot after every completion and starve it forever.
+    poll_schedule.completion(boost_deadline ? BOOST_POLL_MS : API_POLL_MS);
+    if (poll_timer) {
+        lv_timer_set_period(poll_timer, poll_schedule.delay_ms);
+        lv_timer_reset(poll_timer);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -165,57 +176,39 @@ static void copy_trimmed(char *dst, size_t n, const char *src) {
 // that looks empty can be explained rather than guessed at.
 static bool wx_verbose = true;
 
-static bool poll_airplanes() {
-    DiagnosticsPhase phase("aircraft_fetch");
+static void handle_airplanes(const FeedHttpResult &result) {
+    contact_request_finished();
+    DiagnosticsPhase phase("aircraft_parse");
     if (wx_verbose && millis() > 300000UL) wx_verbose = false;
 
-    WiFiClientSecure client;
-    client.setInsecure();
-
-    // Built from the configured centre, radius in nautical miles (km / 1.852).
-    int radius_nm = (int)ceilf(radius_km / 1.852f);
-    char url[160];
-    snprintf(url, sizeof(url), "%s/%.4f/%.4f/%d",
-             AIRPLANE_API_HOST, (double)HOME_LAT, (double)HOME_LON, radius_nm);
-
-    HTTPClient http;
-    http.begin(client, url);
-    http.setUserAgent(HTTP_USER_AGENT);
-    configure_http(http, client, false); // adsb.lol requires HTTP/1.1
-
-    int code = http.GET();
+    int code = result.code;
     if (code == 429) {
         Serial.println("Airplane API HTTP 429 — cancelling boost");
         stats.air_fail++;
         cancel_boost();
-        http.end();
-        return false;
+        return;
     }
     if (code != 200) {
         Serial.printf("Airplane API HTTP %d\r\n", code);
         stats.air_fail++;
-        http.end();
-        return false;
+        return;
     }
 
-    HttpBodyBuffer payload;
-    bool body_ok = read_http_body(http, payload, 256 * 1024);
-    http.end();
-    if (!body_ok) { stats.air_fail++; return false; }
+    if (!result.body_ok) { stats.air_fail++; return; }
 
     JsonDocument filter;
     JsonObject fields = filter["ac"][0].to<JsonObject>();
     for (const char *key : {"lat", "lon", "hex", "category", "alt_baro",
                             "flight", "track", "gs"}) fields[key] = true;
     JsonDocument doc;
-    DeserializationError err = deserializeJson(doc, (const char *)payload.data,
-        payload.size, DeserializationOption::Filter(filter));
+    DeserializationError err = deserializeJson(doc, result.data,
+        result.size, DeserializationOption::Filter(filter));
     if (err) {
         Serial.printf("Airplane JSON error: %s\r\n", err.c_str());
         stats.air_fail++;
-        return false;
+        return;
     }
-    if (!doc["ac"].is<JsonArray>()) { stats.air_fail++; return false; }
+    if (!doc["ac"].is<JsonArray>()) { stats.air_fail++; return; }
 
     JsonArray ac = doc["ac"];
 
@@ -292,56 +285,53 @@ static bool poll_airplanes() {
                   "%d in range, %d tracked\r\n",
                   (int)ac.size(), n_surface, n_ground,
                   n_incoming, proximity.aircraft_count);
-    return proximity.aircraft_count > 0;
+    proximity.airplane_nearby = proximity.aircraft_count > 0;
+}
+
+static bool poll_airplanes() {
+    FeedHttpRequest request;
+    request.label = "aircraft_fetch";
+    request.http10 = false; // adsb.lol requires HTTP/1.1
+    request.max_bytes = 256 * 1024;
+    int radius_nm = (int)ceilf(radius_km / 1.852f);
+    snprintf(request.url, sizeof(request.url), "%s/%.4f/%.4f/%d",
+             AIRPLANE_API_HOST, (double)HOME_LAT, (double)HOME_LON, radius_nm);
+    return feed_http_submit(request, handle_airplanes);
 }
 
 // ---------------------------------------------------------------------------
 // Snowplow polling
 // ---------------------------------------------------------------------------
-static bool poll_snowplows() {
-    DiagnosticsPhase phase("plow_fetch");
-    WiFiClientSecure client;
-    client.setInsecure(); // Skip cert verification
-
-    HTTPClient http;
-    http.begin(client, PLOW_API_URL);
-    configure_http(http, client);
-    http.addHeader("X-Requested-With", "XMLHttpRequest");
-    http.addHeader("Accept", "application/json");
-    http.setUserAgent(HTTP_USER_AGENT);
-
-    int code = http.GET();
+static void handle_snowplows(const FeedHttpResult &result) {
+    contact_request_finished();
+    DiagnosticsPhase phase("plow_parse");
+    int code = result.code;
     if (code == 429) {
         Serial.println("Plow API HTTP 429 — cancelling boost");
         stats.plow_fail++;
         cancel_boost();
-        http.end();
-        return false;
+        return;
     }
     if (code != 200) {
         Serial.printf("Plow API HTTP %d\r\n", code);
         stats.plow_fail++;
-        http.end();
-        return false;
+        return;
     }
 
-    HttpBodyBuffer payload;
-    bool body_ok = read_http_body(http, payload, 1024 * 1024);
-    http.end();
-    if (!body_ok) { stats.plow_fail++; return false; }
+    if (!result.body_ok) { stats.plow_fail++; return; }
 
     JsonDocument filter;
     filter["item2"][0]["itemId"] = true;
     filter["item2"][0]["location"] = true;
     JsonDocument doc;
-    DeserializationError err = deserializeJson(doc, (const char *)payload.data,
-        payload.size, DeserializationOption::Filter(filter));
+    DeserializationError err = deserializeJson(doc, result.data,
+        result.size, DeserializationOption::Filter(filter));
     if (err) {
         Serial.printf("Plow JSON error: %s\r\n", err.c_str());
         stats.plow_fail++;
-        return false;
+        return;
     }
-    if (!doc["item2"].is<JsonArray>()) { stats.plow_fail++; return false; }
+    if (!doc["item2"].is<JsonArray>()) { stats.plow_fail++; return; }
 
     JsonArray vehicles = doc["item2"];
     int total = vehicles.size();
@@ -383,7 +373,16 @@ static bool poll_snowplows() {
     stats.plow_last_ok_ms = millis();
     Serial.printf("Snowplows: %d total, %d in range, %d tracked\r\n",
                   total, n_incoming, proximity.plow_count);
-    return proximity.plow_count > 0;
+    proximity.snowplow_nearby = proximity.plow_count > 0;
+}
+
+static bool poll_snowplows() {
+    FeedHttpRequest request;
+    request.label = "plow_fetch";
+    request.xhr = true;
+    request.max_bytes = 1024 * 1024;
+    snprintf(request.url, sizeof(request.url), "%s", PLOW_API_URL);
+    return feed_http_submit(request, handle_snowplows);
 }
 
 // ---------------------------------------------------------------------------
@@ -393,11 +392,7 @@ static bool poll_snowplows() {
 // on screen, and the shorter the gap between fixes the less the renderer has
 // to extrapolate. Plows move at plow speed and are happy with every 4th tick.
 // ---------------------------------------------------------------------------
-static uint32_t poll_cycle = 0;
-
 static void poll_tick_cb(lv_timer_t *timer) {
-    (void)timer;
-
     // Check if boost period has expired
     if (boost_deadline && millis() > boost_deadline) {
         boost_deadline = 0;
@@ -405,23 +400,32 @@ static void poll_tick_cb(lv_timer_t *timer) {
         Serial.println("Boost polling: expired");
     }
 
+    // One shared transport slot avoids simultaneous TLS allocations. Do not
+    // disconnect/reconfigure WiFi while a weather/contact request owns it.
+    const uint32_t regular_period = boost_deadline ? BOOST_POLL_MS : API_POLL_MS;
+    if (poll_schedule.request_pending) {
+        lv_timer_set_period(timer, regular_period);
+        return;
+    }
+    if (feed_http_busy()) {
+        poll_schedule.submission(false, regular_period);
+        lv_timer_set_period(timer, poll_schedule.delay_ms);
+        return;
+    }
     wifi_ensure();
     if (!wifi_connected) {
         proximity.airplane_nearby = false;
         proximity.snowplow_nearby = false;
         proximity.aircraft_count = 0;
         proximity.plow_count = 0;
+        lv_timer_set_period(timer, regular_period);
         return;
     }
 
-    if (poll_cycle % 4 == 3) {
-        proximity.snowplow_nearby = poll_snowplows();
-    } else {
-        proximity.airplane_nearby = poll_airplanes();
-    }
-    diagnostics_checkpoint();
-
-    poll_cycle++;
+    bool accepted = poll_schedule.next_is_plow() ? poll_snowplows() : poll_airplanes();
+    // Busy/rejected submissions do not consume an aircraft/plow turn.
+    poll_schedule.submission(accepted, regular_period);
+    lv_timer_set_period(timer, poll_schedule.delay_ms);
 }
 
 // ---------------------------------------------------------------------------

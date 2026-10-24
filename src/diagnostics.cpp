@@ -28,7 +28,7 @@ int64_t epoch_now() {
 }
 }
 
-const char *diagnostics_build() { return "freeze-recovery " __DATE__ " " __TIME__; }
+const char *diagnostics_build() { return "freeze-recovery async-feeds " __DATE__ " " __TIME__; }
 const DiagnosticsStatus &diagnostics_status() { return state; }
 const DiagnosticBreadcrumb &diagnostics_current() { return retained.breadcrumb; }
 

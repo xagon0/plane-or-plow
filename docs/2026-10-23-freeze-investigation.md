@@ -205,7 +205,11 @@ and coordinates, held/released input, retry backoff, alternate address
 discovery, recovery, and timer wraparound. The [host test guide](../tests/README.md)
 contains the exact sanitizer commands and the buffered PNG regression check.
 
-## Hardware recovery and deployment
+## Hardware recovery and initial deployment
+
+This initial repair was subsequently extended to remove short replay/network
+pauses. See the [replay follow-up](2026-10-23-replay-follow-up.md) for the newer
+firmware and its verification; the evidence below records the earlier build.
 
 The hardware watchdog test was repeated with the checked GT911 driver. The
 loop deliberately stopped feeding while FreeRTOS idle tasks continued running.
@@ -215,7 +219,7 @@ and brought GT911 back online at `0x5d` with zero touch errors. Its HTTP status
 endpoint responded after reboot. Both test core dumps were saved locally,
 and the test core-dump partition was erased before deploying production.
 
-The final production firmware was written at `0x10000` over USB at 115200 baud;
+The initial production repair was written at `0x10000` over USB at 115200 baud;
 esptool reported **Hash of data verified**. Bootloader, partition table and
 NVS configuration were preserved. The deliberately stalled test is not compiled
 into this image. The production binary is 1,348,976 bytes, SHA-256:

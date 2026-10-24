@@ -6,6 +6,7 @@
 #include "timekeep.h"
 #include "diagnostics.h"
 #include "touch_input.h"
+#include "feed_http.h"
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WebServer.h>
@@ -127,6 +128,23 @@ static void handle_status() {
     }
     diagnostic["breadcrumb_retention"] = "RTC RAM; lost on power-off";
 
+    const FeedHttpStatus feed_status = feed_http_status();
+    JsonObject feed = doc["feed_http"].to<JsonObject>();
+    feed["ready"] = feed_status.ready;
+    feed["busy"] = feed_status.busy;
+    feed["label"] = feed_status.label;
+    feed["age_ms"] = feed_status.age_ms;
+    feed["completion_pending"] = feed_status.completion_pending;
+    feed["watchdog_active"] = feed_status.watchdog_active;
+    feed["completed"] = feed_status.completed;
+    feed["last_elapsed_ms"] = feed_status.last_elapsed_ms;
+    feed["worker_stack_free"] = feed_status.worker_stack_free;
+    feed["worker_error"] = feed_status.worker_error;
+
+    JsonObject render = doc["render"].to<JsonObject>();
+    render["frames"] = ambient_frame_count();
+    render["max_frame_gap_ms"] = ambient_max_frame_gap_ms();
+
     const TouchStats &touch_stats = touch_input_stats();
     JsonObject touch = doc["touch"].to<JsonObject>();
     touch["available"] = touch_stats.available;
@@ -169,6 +187,9 @@ static void handle_status() {
 
     JsonObject radar = doc["radar"].to<JsonObject>();
     radar["valid"] = weather_valid;
+    radar["replaying"] = weather_replaying();
+    radar["history_frames"] = weather_history_frames();
+    radar["replay_frame"] = weather_replay_frame();
     radar["fetches"] = stats.radar_fetches;
     radar["failures"] = stats.radar_failures;
     radar["last_ms"] = stats.radar_last_ms;

@@ -22,7 +22,10 @@ extern float weather_inbound_bearing;   // degrees, 0 = north, clockwise
 extern float weather_inbound_km;
 
 void weather_init();
+void weather_tick();         // apply completed downloads outside an active replay
 void weather_replay();        // play the stored history, then settle back
 bool weather_replaying();
+int weather_replay_frame();
+int weather_history_frames();
 
 #endif // WEATHER_H

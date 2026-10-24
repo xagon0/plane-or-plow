@@ -61,4 +61,8 @@ void ambient_init();
 // frame lands or a replay steps; never per display frame.
 void ambient_scene_dirty();
 
+uint32_t ambient_frame_count();
+uint32_t ambient_max_frame_gap_ms();
+void ambient_reset_frame_timing();
+
 #endif // AMBIENT_H

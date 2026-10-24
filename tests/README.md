@@ -107,3 +107,86 @@ Both touch test commands passed on 2026-10-23 with AddressSanitizer and
 UndefinedBehaviorSanitizer enabled, with no sanitizer findings. These tests
 do not verify physical touch-controller behavior; that is checked on the
 board separately.
+
+## Shared feed polling schedule
+
+```sh
+c++ -std=c++11 -Wall -Wextra -Werror tests/test_poll_schedule.cpp -o /tmp/planeplow-test-poll-schedule
+/tmp/planeplow-test-poll-schedule
+```
+
+Expected result:
+
+```text
+PASS: shared-slot collision, boost scheduling, and slow-job fairness
+```
+
+The production contact scheduling helper is exercised against recurring
+transport contention. Rejected submissions must retry after 250 ms without
+consuming an aircraft/plow turn, preserve the three-aircraft/one-plow cadence,
+and restore the requested regular or boosted interval after completion.
+Long-running jobs retain ownership and restart their timer after completion;
+simulated requests longer than the regular/boost interval must still let both
+contending sources take turns.
+
+## Async radar completion and replay
+
+This test compiles the actual `weather.cpp` and real PNG decoder. Hardware,
+LVGL timer control, the clock and shared HTTP transport are stubbed. Its fixed
+test configuration uses no private location or WiFi configuration.
+
+```sh
+cc -fsanitize=address -c .pio/libdeps/esp32s3/pngle/src/pngle.c -o /tmp/planeplow-weather-pngle.o
+cc -fsanitize=address -c .pio/libdeps/esp32s3/pngle/src/miniz.c -o /tmp/planeplow-weather-miniz.o
+c++ -std=c++17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -Itests/weather_fakes -I.pio/libdeps/esp32s3/pngle/src tests/test_weather_async.cpp /tmp/planeplow-weather-pngle.o /tmp/planeplow-weather-miniz.o -o /tmp/planeplow-test-weather-async
+/tmp/planeplow-test-weather-async tests/fixtures/radar-synthetic.png
+```
+
+Expected result:
+
+```text
+PASS: actual weather async replay/lifetime, backfill, wide priority, completion spacing and errors
+```
+
+Current and historical responses arrive while replay is active. The tests
+verify that display/history changes wait until replay ends, the decoded result
+survives destruction of the worker-owned response buffer, another feed can use
+the transport while radar waits, and completion applies exactly once. They
+also check the immediate oldest-frame display and replay counter, contention
+retry, a due wide scan with incomplete/failed backfill, timer spacing from a
+slow request's completion, and HTTP/truncated-PNG failures preserving the
+last valid frame.
+
+The application test uses AddressSanitizer and UndefinedBehaviorSanitizer;
+the pinned C decoder uses AddressSanitizer. Enabling UndefinedBehaviorSanitizer
+on pngle 1.1.0 also reports its existing signed left shift in `read_uint32`
+(`pngle.c:144`). That third-party warning is separate from the tested async
+state/ownership changes and is not suppressed in application code.
+
+## Background feed worker lifecycle
+
+```sh
+c++ -std=c++11 -Wall -Wextra -Werror -fsanitize=address,undefined -pthread -Itests/feed_fakes tests/test_feed_http.cpp -o /tmp/planeplow-test-feed-http
+/tmp/planeplow-test-feed-http
+```
+
+Expected result:
+
+```text
+PASS: feed worker ownership, main-thread callbacks, blocked-transport responsiveness, watchdog discipline and failure cleanup
+```
+
+This compiles the actual `feed_http.cpp` against threaded queue/task and HTTP
+transport fakes. It deliberately blocks the worker inside `HTTPClient::GET()`
+while the main thread continues ticking, then verifies delivery on the main
+thread, no watchdog feeds inside the blocked request, and exactly one active
+request. It checks that URL and label storage are copied, clients are destroyed
+before the callback, the body remains alive throughout the callback, nested
+submissions are rejected until parsing finishes, and each body is freed once.
+Failure cases include queue/task allocation, watchdog registration, initial
+enqueue, HTTP 429, a partial body, and completion enqueue. The test substitutes
+the transport; the separate HTTP body tests cover byte-transfer deadlines and
+framing, and physical render timing still requires the board.
+
+The worker lifecycle test passed on 2026-10-23 under AddressSanitizer and
+UndefinedBehaviorSanitizer, with no sanitizer findings.
