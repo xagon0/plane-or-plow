@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Configure Plane or Plow for a location and build its basemap.
+"""Configure Mile High Club (Plane or Plow) for a location and build its basemap.
 
     python3 tools/configure.py --address "Cochrane, Alberta" --ssid MyWiFi --password hunter2
     python3 tools/configure.py --lat 51.0447 --lon -114.0719 --radius 20
@@ -328,7 +328,7 @@ def write_secrets(path, ssid, password, name, lat, lon, radius, tz):
 
 def main():
     ap = argparse.ArgumentParser(
-        description="Configure Plane or Plow for a location and build its basemap.")
+        description="Configure Mile High Club (Plane or Plow) for a location and build its basemap.")
     loc = ap.add_argument_group("location (one of)")
     loc.add_argument("--address", help='e.g. "Cochrane, Alberta"')
     loc.add_argument("--lat", type=float)

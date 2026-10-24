@@ -1,4 +1,6 @@
-# Plane or Plow
+# Mile High Club
+
+*Plane or Plow*
 
 An ambient radar scope for one house. It shows the aircraft and snowplows
 within 15 km, and the snow on its way, on a 480×480 panel that sits in a room
@@ -130,7 +132,7 @@ Radar: 64x64 over 33 km, 10-frame history
 Scope ready: 14.5 px/km, range 15 km
 WiFi connected: 192.168.1.42 (RSSI -57)
 Status: http://planeorplow.local/status
-Plane or Plow — scope ready
+Mile High Club — scope ready
 Radar tile 64x64 (33km): 1131 bytes, 1051 cells, 21 ms, heap 252472, stack left 12556
 Airplanes: 5 in API, 5 in range, 5 tracked
 ```

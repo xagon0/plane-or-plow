@@ -94,7 +94,8 @@ static void handle_status() {
     // ArduinoJson escapes API-supplied labels, quotes, and control characters.
     // A fixed output buffer bounds the response without the extra String copy.
     JsonDocument doc;
-    doc["name"] = "Plane or Plow";
+    doc["name"] = APP_NAME;
+    doc["subtitle"] = APP_SUBTITLE;
     doc["uptime_s"] = up;
     char uptime[32];
     snprintf(uptime, sizeof(uptime), "%luh %lum", (unsigned long)(up / 3600),

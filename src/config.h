@@ -1,6 +1,11 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
+// Product name and the original descriptive subtitle.
+#define APP_NAME     "Mile High Club"
+#define APP_TITLE    "MILE HIGH CLUB"
+#define APP_SUBTITLE "Plane or Plow"
+
 #if __has_include("secrets.h")
 #include "secrets.h"
 #else

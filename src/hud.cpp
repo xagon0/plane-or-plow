@@ -103,7 +103,7 @@ static void hud_tick_cb(lv_timer_t *timer) {
         lv_label_set_text(lbl_title, replay);
         lv_obj_set_style_text_letter_space(lbl_title, 1, 0);
     } else {
-        lv_label_set_text(lbl_title, "PLANE OR PLOW");
+        lv_label_set_text(lbl_title, APP_TITLE);
         lv_obj_set_style_text_letter_space(lbl_title, 4, 0);
     }
 
@@ -147,7 +147,7 @@ void hud_init() {
     // Top strip — above the scope rim.
     lbl_title = make_label(&lv_font_montserrat_14, C_TEXT_FAINT, 4,
                            LV_ALIGN_TOP_MID, 0, 2);
-    lv_label_set_text(lbl_title, "PLANE OR PLOW");
+    lv_label_set_text(lbl_title, APP_TITLE);
 
     // Upper corners — caption above the count. The caption is the wide part,
     // so it goes where the corner is widest; the narrow numeral drops into the

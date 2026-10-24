@@ -176,7 +176,7 @@ void setup() {
 
     ambient_reset_frame_timing();
     status_mark_settled();
-    Serial.println("Plane or Plow — scope ready");
+    Serial.println(APP_NAME " — scope ready");
     diagnostics_phase("loop-ready");
     diagnostics_checkpoint();
 }
