@@ -93,9 +93,10 @@ the run's minimum was 154,480 bytes. Temporary TLS allocations
 reduce free heap while a download is active, so busy samples are not comparable
 to the idle baseline.
 
-The earlier physical touch test passed on the first repaired build. The user
-has been asked to recheck the new replay indicator; that follow-up confirmation
-has not yet arrived. Host tests exercise replay with synthetic precipitation
-and in-flight results. This short run does not establish multi-day reliability.
+The user subsequently confirmed on the updated device that radar replay
+advances through its frame numbers without the pause, while the pulses keep
+moving. The earlier physical brightness/touch check also passed. Host tests
+exercise replay with synthetic precipitation and in-flight results. This short
+run does not establish multi-day reliability.
 Evidence is saved in `diagnostics/serial-async.log`, `status-async.ndjson`,
 `async-verification.json` and `deployment-async-manifest.json` beside the source.
