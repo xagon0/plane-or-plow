@@ -235,8 +235,10 @@ and 330 seconds of uptime. All samples retained boot ID `c45cdcaa`, with the
 watchdog armed and no intervening restart. There were 12 successful aircraft
 polls, 3 successful plow polls and 11 successful radar fetches, with zero
 failures. GT911 remained available with zero transport or invalid-frame errors.
-No touch frames were generated during this unattended observation; a physical
-finger test has not yet been confirmed. The clock advanced normally in status.
+No touch frames were generated during this unattended observation. After
+deployment, the user confirmed that display animation and physical touch,
+including the brightness strip, both work normally. The clock advanced
+normally in status.
 
 Free internal heap settled at 239,588 bytes, with a minimum of 186,412 bytes
 and 6,384,767 bytes of free PSRAM. Free heap was essentially flat after radar
@@ -246,4 +248,4 @@ controlled multi-day memory comparison.
 
 A short bench run cannot establish reliability over several days. The status
 endpoint and serial capture verify loop progress and controller communication;
-physical display animation and finger input require direct observation.
+the user separately confirmed normal display animation and finger input.
