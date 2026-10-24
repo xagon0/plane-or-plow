@@ -2,6 +2,8 @@
 
 *Plane or Plow*
 
+(Because you're either a plane… or you're getting plowed.)
+
 An ambient radar scope for one house. It shows the aircraft and snowplows
 within 15 km, and the snow on its way, on a 480×480 panel that sits in a room
 and glows.
